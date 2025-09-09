@@ -7,7 +7,7 @@ from telethon.tl.types import InputPeerEmpty
 import os
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 import zipfile
 from io import BytesIO
 import socks
@@ -77,12 +77,17 @@ def get_user_lists():
 
 
 async def reply_watcher(client, usernames, msg2, duration=3600):
+    start_time = datetime.now(timezone.utc)
+
     async def handler(event):
+        if event.message.out or event.message.date <= start_time:
+            return
         sender = await event.get_sender()
         username = getattr(sender, 'username', None)
         if username and username.lower() in usernames:
             await event.reply(msg2)
             usernames.remove(username.lower())
+
     client.add_event_handler(handler, events.NewMessage(incoming=True))
     try:
         await asyncio.sleep(duration)
@@ -94,6 +99,7 @@ async def reply_watcher(client, usernames, msg2, duration=3600):
 account_status = {}
 proxy_status = {}
 available_chats = []
+reply_tasks = []
 # Глобальная блокировка для исключения одновременного доступа к сессиям
 session_lock = asyncio.Lock()
 
@@ -793,6 +799,10 @@ async def send_reply(event):
     if not users:
         await event.respond('Нет пользователей для рассылки')
         return
+    for task in reply_tasks:
+        task.cancel()
+    reply_tasks.clear()
+
     async with session_lock:
         proxy_map = await get_proxy_map()
         sessions = await get_sessions()
@@ -868,7 +878,8 @@ async def send_reply(event):
         for session, client in clients.items():
             usernames = pending.get(client, set())
             if usernames:
-                asyncio.create_task(reply_watcher(client, usernames, msg2))
+                task = asyncio.create_task(reply_watcher(client, usernames, msg2))
+                reply_tasks.append(task)
             else:
                 await client.disconnect()
 
