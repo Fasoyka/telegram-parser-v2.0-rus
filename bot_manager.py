@@ -10,6 +10,9 @@ import re
 from datetime import datetime
 from defunc import getoptions
 
+LISTS_DIR = 'lists'
+os.makedirs(LISTS_DIR, exist_ok=True)
+USER_FILE = os.path.join(LISTS_DIR, 'usernames.txt')
 MESSAGE_FILE = 'message.txt'
 
 options = getoptions()
@@ -28,15 +31,11 @@ async def get_sessions():
 
 
 def get_user_lists():
-    lists = []
-    if os.path.exists('usernames.txt') and os.path.getsize('usernames.txt') > 0:
-        lists.append('usernames.txt')
-    lists.extend(
-        sorted(
-            [f for f in os.listdir('.') if f.startswith('users_') and f.endswith('.txt')]
-        )
+    return sorted(
+        os.path.join(LISTS_DIR, f)
+        for f in os.listdir(LISTS_DIR)
+        if f.endswith('.txt')
     )
-    return lists
 
 # Храним состояние аккаунтов: ok или текст ошибки
 account_status = {}
@@ -62,10 +61,10 @@ async def start(event):
         '/set_message <текст> - текст рассылки\n'
         '/add_user <username> - добавить пользователя\n'
         '/clear_users - очистить список\n'
-        '/users - файл с пользователями\n'
+        '/users <имя> - отправить список\n'
         '/chats - список чатов для парсинга\n'
         '/parse <номер> - спарсить чат\n'
-        '/lists - доступные списки\n'
+        '/lists - отправить все списки\n'
         '/del_list <номер> - удалить список\n'
         '/split <номер> <частей> - разделить список\n'
         '/test <username> - тестовая отправка\n'
@@ -176,7 +175,7 @@ async def add_user(event):
     if len(parts) < 2:
         await event.respond('Использование: /add_user username')
         return
-    with open('usernames.txt', 'a') as f:
+    with open(USER_FILE, 'a') as f:
         f.write(parts[1].strip() + '\n')
     await event.respond('Пользователь добавлен')
 
@@ -184,20 +183,28 @@ async def add_user(event):
 @bot.on(events.NewMessage(pattern='/clear_users'))
 @notify_errors
 async def clear_users(event):
-    open('usernames.txt', 'w').close()
+    open(USER_FILE, 'w').close()
     await event.respond('Список пользователей очищен')
 
 
 @bot.on(events.NewMessage(pattern='/users'))
 @notify_errors
 async def send_users_file(event):
-    if os.path.exists('usernames.txt'):
-        if os.path.getsize('usernames.txt') > 0:
-            await event.respond(file='usernames.txt')
+    parts = event.raw_text.split(maxsplit=1)
+    if len(parts) < 2:
+        await event.respond('Использование: /users имя')
+        return
+    name = parts[1].strip()
+    if not name.endswith('.txt'):
+        name += '.txt'
+    path = os.path.join(LISTS_DIR, name)
+    if os.path.exists(path):
+        if os.path.getsize(path) > 0:
+            await event.respond(file=path)
         else:
-            await event.respond('Файл usernames.txt пуст')
+            await event.respond('Файл пуст')
     else:
-        await event.respond('Файл usernames.txt не найден')
+        await event.respond('Файл не найден')
 
 
 @bot.on(events.NewMessage(pattern='/chats'))
@@ -285,15 +292,15 @@ async def parse_command(event):
             prefix = re.sub(r"\W+", "_", chat.title)[:10]
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             if parse_names and names:
-                name_file = f"users_{prefix}_{timestamp}.txt"
+                name_file = os.path.join(LISTS_DIR, f"users_{prefix}_{timestamp}.txt")
                 with open(name_file, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(names))
-                created_files.append(name_file)
+                created_files.append(os.path.basename(name_file))
             if parse_ids and ids:
-                id_file = f"ids_{prefix}_{timestamp}.txt"
+                id_file = os.path.join(LISTS_DIR, f"ids_{prefix}_{timestamp}.txt")
                 with open(id_file, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(ids))
-                created_files.append(id_file)
+                created_files.append(os.path.basename(id_file))
         msg = 'Спаршено'
         if created_files:
             msg += ': ' + ', '.join(created_files)
@@ -307,7 +314,7 @@ async def list_user_lists(event):
     if not files:
         await event.respond('Нет списков')
         return
-    lines = [f'{i} - {name}' for i, name in enumerate(files)]
+    lines = [f'{i} - {os.path.basename(name)}' for i, name in enumerate(files)]
     await event.respond('Списки:\n' + '\n'.join(lines))
 
 
@@ -484,7 +491,8 @@ async def handle_user_file(event):
     if event.raw_text.startswith('/'):
         return
     if event.message.file and event.message.file.name.endswith('.txt'):
-        await event.message.download_media(file=event.message.file.name)
+        path = os.path.join(LISTS_DIR, event.message.file.name)
+        await event.message.download_media(file=path)
         await event.respond('Список пользователей сохранён')
 
 bot.run_until_disconnected()
