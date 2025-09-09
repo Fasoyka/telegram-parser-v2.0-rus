@@ -1,6 +1,7 @@
 from collections import deque
 from functools import wraps
 from telethon import TelegramClient, events
+from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
 import os
@@ -108,12 +109,36 @@ async def del_session(event):
 @bot.on(events.NewMessage(pattern='/add_session'))
 @notify_errors
 async def add_session(event):
-    if not event.message.file or not event.message.file.name.endswith('.session'):
-        await event.respond('Пришлите файл .session вместе с командой')
+    # Если пришёл файл .session, сохраняем его как раньше
+    if event.message.file and event.message.file.name.endswith('.session'):
+        async with session_lock:
+            await event.message.download_media(file=event.message.file.name)
+        await event.respond('Сессия добавлена')
         return
-    async with session_lock:
-        await event.message.download_media(file=event.message.file.name)
-    await event.respond('Сессия добавлена')
+
+    # Иначе запускаем интерактивное добавление через телефон
+    async with bot.conversation(event.chat_id, timeout=120) as conv:
+        await conv.send_message('Введите номер телефона в формате +79990000000')
+        phone = (await conv.get_response()).raw_text.strip()
+        session_name = phone.replace('+', '').replace(' ', '')
+        client = TelegramClient(session_name, api_id, api_hash)
+        await client.connect()
+        try:
+            await client.send_code_request(phone)
+            await conv.send_message('Введите код из Telegram:')
+            code = (await conv.get_response()).raw_text.strip()
+            try:
+                await client.sign_in(phone, code)
+            except SessionPasswordNeededError:
+                await conv.send_message('Введите пароль:')
+                password = (await conv.get_response()).raw_text.strip()
+                await client.sign_in(password=password)
+            account_status[f'{session_name}.session'] = 'ok'
+            await conv.send_message('Сессия добавлена')
+        except Exception as e:
+            await conv.send_message(f'Ошибка: {e}')
+        finally:
+            await client.disconnect()
 
 @bot.on(events.NewMessage(pattern='/set_message'))
 @notify_errors
