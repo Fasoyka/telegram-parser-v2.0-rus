@@ -128,46 +128,38 @@ session_lock = asyncio.Lock()
 
 
 def parse_proxy(proxy_str):
-    """Convert a proxy definition into a Telethon-friendly dict.
+    """Convert a textual proxy definition into a dictionary.
 
-    The function understands several common formats::
+    ``proxy_str`` may be in any of the following common forms::
 
         host:port
-        host:port:user:password
-        host:port:rdns:user:password  # ``rdns`` is ignored
+        user:pass@host:port
+        socks5://user:pass@host:port
 
-    ``proxy_str`` may occasionally contain extra ``:`` characters (for
-    example inside IPv6 addresses or passwords). To be resilient the string
-    is split from the right side, limiting the number of processed parts to
-    five. Returning a dictionary with explicit field names avoids Telethon
-    misinterpreting the tuple order, which previously manifested as
-    ``ValueError: too many values to unpack (expected 5)``.
+    The implementation relies on :func:`urllib.parse.urlparse` to deal with
+    corner cases such as IPv6 addresses or credentials containing ``:``.
+    Only SOCKS5 proxies are supported, which matches the expectations of the
+    rest of the project.  The returned mapping intentionally exposes just the
+    fields consumed by Telethon; omitting the ``rdns`` flag keeps the result
+    to five items and avoids ``ValueError: too many values to unpack`` errors
+    observed with the previous implementation.
     """
 
-    parts = proxy_str.rsplit(':', 4)
-    if len(parts) < 2:
+    from urllib.parse import urlparse
+
+    if '://' not in proxy_str:
+        proxy_str = 'socks5://' + proxy_str
+
+    parsed = urlparse(proxy_str)
+    if not parsed.hostname or not parsed.port:
         raise ValueError('Некорректный формат прокси')
-
-    host = parts[0]
-    port = int(parts[1])
-    user = password = None
-
-    if len(parts) == 3:
-        user = parts[2] or None
-    elif len(parts) == 4:
-        user = parts[2] or None
-        password = parts[3] or None
-    elif len(parts) == 5:
-        user = parts[3] or None
-        password = parts[4] or None
 
     return {
         'proxy_type': socks.SOCKS5,
-        'addr': host,
-        'port': port,
-        'rdns': True,
-        'username': user,
-        'password': password,
+        'addr': parsed.hostname,
+        'port': parsed.port,
+        'username': parsed.username,
+        'password': parsed.password,
     }
 
 
