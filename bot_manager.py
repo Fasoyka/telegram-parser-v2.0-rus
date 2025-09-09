@@ -133,6 +133,7 @@ def parse_proxy(proxy_str):
     ``proxy_str`` may be in any of the following common forms::
 
         host:port
+        host:port:user:pass
         user:pass@host:port
         socks5://user:pass@host:port
 
@@ -146,6 +147,23 @@ def parse_proxy(proxy_str):
     """
 
     from urllib.parse import urlparse
+
+    # Allow ``ip:port:user:pass`` format used by some proxy providers.
+    if '@' not in proxy_str and proxy_str.count(':') == 3:
+        host, port, username, password = proxy_str.split(':', 3)
+        if not host or not port:
+            raise ValueError('Некорректный формат прокси')
+        try:
+            port = int(port)
+        except ValueError:
+            raise ValueError('Некорректный порт в прокси')
+        return {
+            'proxy_type': socks.SOCKS5,
+            'addr': host,
+            'port': port,
+            'username': username,
+            'password': password,
+        }
 
     if '://' not in proxy_str:
         proxy_str = 'socks5://' + proxy_str
