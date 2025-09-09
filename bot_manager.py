@@ -133,7 +133,11 @@ def parse_proxy(proxy_str):
     port = int(parts[1])
     user = parts[2] if len(parts) > 2 else None
     password = parts[3] if len(parts) > 3 else None
-    return (socks.SOCKS5, host, port, True, user, password)
+    # Telethon expects a 5-item tuple: (type, host, port, username, password)
+    # Older versions accepted an ``rdns`` flag as the fourth item, but
+    # starting from Telethon 1.40 this causes a "too many values to unpack"
+    # error. Drop the ``rdns`` placeholder to keep compatibility.
+    return (socks.SOCKS5, host, port, user, password)
 
 
 async def get_proxy_map():
