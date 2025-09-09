@@ -97,7 +97,7 @@ async def start(event):
         [Button.text('Списки'), Button.text('Очистить пользователей')],
         [Button.text('Логи отправки'), Button.text('Сессии')],
         [Button.text('Добавить сессию'), Button.text('Добавить прокси')],
-        [Button.text('Пинг прокси')],
+        [Button.text('Пинг прокси'), Button.text('Скачать прокси')],
     ]
     await event.respond(
         'Выберите команду на клавиатуре ниже.\n'
@@ -112,7 +112,8 @@ async def start(event):
         '/send <номер> - запустить рассылку\n'
         '/del_session <имя> - удалить сессию\n'
         '/add_proxy <прокси> - добавить прокси (несколько через перенос строки)\n'
-        '/ping_proxy - проверить прокси',
+        '/ping_proxy - проверить прокси\n'
+        '/get_proxy - скачать список прокси',
         buttons=keyboard,
     )
 
@@ -254,6 +255,16 @@ async def ping_proxy(event):
         finally:
             await client.disconnect()
     await event.respond('Проверка прокси завершена')
+
+
+@bot.on(events.NewMessage(pattern='/get_proxy|Скачать прокси'))
+@notify_errors
+async def get_proxy_list(event):
+    proxies = load_proxies()
+    if not proxies:
+        await event.respond('Список прокси пуст')
+        return
+    await event.respond('Список прокси:', file=PROXY_FILE)
 
 @bot.on(events.NewMessage(pattern='/set_message'))
 @notify_errors
