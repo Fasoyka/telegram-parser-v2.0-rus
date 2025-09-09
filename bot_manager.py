@@ -128,7 +128,6 @@ session_lock = asyncio.Lock()
 
 
 def parse_proxy(proxy_str):
-    """Convert a textual proxy string into Telethon's internal tuple.
 
     Supports the following common forms::
 
@@ -137,10 +136,13 @@ def parse_proxy(proxy_str):
         user:pass@host:port
         socks5://user:pass@host:port
 
-    The return value is the exact tuple produced by
-    :func:`telethon.network.connection.connection.Connection._parse_proxy` for
-    the given parameters, ensuring compatibility with both new and old
-    Telethon versions that expect either five or six positional items.
+    To remain compatible with different Telethon releases, the function
+    returns a ``dict`` for modern versions (which accept keyword arguments)
+    and a ``tuple`` for older versions that unpack positional arguments.  In
+    either case the structure contains exactly the five fields expected by
+    Telethon (``proxy_type``, ``addr``, ``port``, ``username`` and
+    ``password``), omitting the optional ``rdns`` flag that previously led to
+    ``ValueError: too many values to unpack`` errors.
     """
 
     from urllib.parse import urlparse
@@ -149,27 +151,35 @@ def parse_proxy(proxy_str):
     # Allow ``ip:port:user:pass`` format used by some proxy providers.
     if '@' not in proxy_str and proxy_str.count(':') == 3:
         host, port, username, password = proxy_str.split(':', 3)
+
     else:
         if '://' not in proxy_str:
             proxy_str = 'socks5://' + proxy_str
         parsed = urlparse(proxy_str)
+
         host = parsed.hostname
         port = parsed.port
         username = parsed.username
         password = parsed.password
 
-    if not host or not port:
-        raise ValueError('Некорректный формат прокси')
-    try:
-        port = int(port)
-    except ValueError:
-        raise ValueError('Некорректный порт в прокси')
 
-    # Delegate to Telethon's own helper which returns a tuple with the
-    # appropriate number of items for the installed version.
-    return Connection._parse_proxy(
-        socks.SOCKS5, host, port, username=username, password=password
-    )
+    if _supports_dict:
+        return {
+            'proxy_type': socks.SOCKS5,
+            'addr': host,
+            'port': port,
+            'username': username,
+            'password': password,
+        }
+    else:
+        return (
+            socks.SOCKS5,
+            host,
+            port,
+            username,
+            password,
+        )
+
 
 
 async def get_proxy_map():
@@ -187,7 +197,8 @@ def notify_errors(func):
         try:
             return await func(event, *args, **kwargs)
         except Exception as e:
-            await event.respond(f'Ошибка: {type(e).__name__}: {e}')
+            print(f'Ошибка: {type(e).__name__}: {e}')
+            await event.respond('Произошла ошибка. Подробности в консоли.')
     return wrapper
 
 @bot.on(events.NewMessage(pattern='/start'))
@@ -333,7 +344,8 @@ async def add_session(event):
             account_status[f'{session_name}.session'] = 'ok'
             await conv.send_message('Сессия добавлена')
         except Exception as e:
-            await conv.send_message(f'Ошибка: {e}')
+            print(f'Ошибка: {e}')
+            await conv.send_message('Произошла ошибка. Подробности в консоли.')
         finally:
             await client.disconnect()
 
