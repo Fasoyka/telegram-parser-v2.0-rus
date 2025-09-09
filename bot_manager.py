@@ -7,6 +7,7 @@ from telethon.tl.types import InputPeerEmpty
 import os
 import asyncio
 import re
+import sqlite3
 from datetime import datetime, timezone
 import zipfile
 from io import BytesIO
@@ -48,11 +49,26 @@ message_delay = load_delay()
 
 
 async def get_sessions():
-    return sorted(
+    sessions = sorted(
         f
         for f in os.listdir(SESSIONS_DIR)
         if f.endswith('.session')
     )
+    for name in sessions:
+        path = os.path.join(SESSIONS_DIR, name)
+        try:
+            with sqlite3.connect(path) as conn:
+                cur = conn.cursor()
+                cur.execute("PRAGMA table_info(sessions)")
+                cols = [row[1] for row in cur.fetchall()]
+                if 'version' not in cols:
+                    cur.execute(
+                        "ALTER TABLE sessions ADD COLUMN version INTEGER DEFAULT 0"
+                    )
+                conn.commit()
+        except sqlite3.Error:
+            pass
+    return sessions
 
 
 def load_proxies():
