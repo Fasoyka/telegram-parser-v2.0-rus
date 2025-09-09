@@ -14,6 +14,8 @@ from telethon.tl.types import (
 )
 import os
 import time
+import re
+from datetime import datetime
 
 
 def _remove_admins_and_mods(client, index, participants):
@@ -42,29 +44,25 @@ def _remove_admins_and_mods(client, index, participants):
     return filtered
 
 def parsing(client, index: int, id: bool, name: bool):
-    all_participants = []
+    """Parse participants of a chat and save to uniquely named files."""
     all_participants = client.get_participants(index)
     all_participants = _remove_admins_and_mods(client, index, all_participants)
+
+    prefix = re.sub(r"\W+", "_", getattr(index, 'title', 'chat'))[:10]
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
     if name:
-        with open('usernames.txt', 'r+') as f:
-            usernames = f.readlines()
+        name_file = f"users_{prefix}_{timestamp}.txt"
+        with open(name_file, 'w', encoding='utf-8') as f:
             for user in all_participants:
-                if user.username:
-                    if ('Bot' not in user.username) and ('bot' not in user.username):
-                        if (('@' + user.username + '\n') not in usernames):
-                            f.write('@' + user.username + '\n')
-                        else:
-                            continue
-                    else:
-                        continue
-                else:
-                    continue
+                if user.username and 'bot' not in user.username.lower():
+                    f.write('@' + user.username + '\n')
+
     if id:
-        with open('userids.txt', 'r+') as f:
-            userids = f.readlines()
+        id_file = f"ids_{prefix}_{timestamp}.txt"
+        with open(id_file, 'w', encoding='utf-8') as f:
             for user in all_participants:
-                if (str(user.id) + '\n') not in userids:
-                    f.write(str(user.id) + '\n')
+                f.write(str(user.id) + '\n')
 
 
 def config():

@@ -6,6 +6,8 @@ from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
 import os
 import asyncio
+import re
+from datetime import datetime
 from defunc import getoptions
 
 MESSAGE_FILE = 'message.txt'
@@ -23,6 +25,18 @@ async def get_sessions():
         for f in os.listdir('.')
         if f.endswith('.session') and f != 'manager_bot.session'
     ]
+
+
+def get_user_lists():
+    lists = []
+    if os.path.exists('usernames.txt') and os.path.getsize('usernames.txt') > 0:
+        lists.append('usernames.txt')
+    lists.extend(
+        sorted(
+            [f for f in os.listdir('.') if f.startswith('users_') and f.endswith('.txt')]
+        )
+    )
+    return lists
 
 # Храним состояние аккаунтов: ok или текст ошибки
 account_status = {}
@@ -51,8 +65,11 @@ async def start(event):
         '/users - файл с пользователями\n'
         '/chats - список чатов для парсинга\n'
         '/parse <номер> - спарсить чат\n'
+        '/lists - доступные списки\n'
+        '/del_list <номер> - удалить список\n'
+        '/split <номер> <частей> - разделить список\n'
         '/test <username> - тестовая отправка\n'
-        '/send - запустить рассылку\n'
+        '/send <номер> - запустить рассылку\n'
         '/end - лог рассылки\n'
         '/sessions - список сессий\n'
         '/del_session <имя> - удалить сессию\n'
@@ -64,9 +81,9 @@ async def start(event):
 async def stats(event):
     sessions = await get_sessions()
     user_count = 0
-    if os.path.exists('usernames.txt'):
-        with open('usernames.txt') as f:
-            user_count = len([u for u in f if u.strip()])
+    for fname in get_user_lists():
+        with open(fname) as f:
+            user_count += len([u for u in f if u.strip()])
     lines = []
     for s in sessions:
         status = account_status.get(s, 'unknown')
@@ -253,39 +270,101 @@ async def parse_command(event):
         opts = getoptions()
         parse_ids = opts[2].strip() == 'True'
         parse_names = opts[3].strip() == 'True'
-        existing_names = set()
-        if parse_names and os.path.exists('usernames.txt'):
-            with open('usernames.txt') as f:
-                existing_names = {u.strip() for u in f if u.strip()}
-            names_file = open('usernames.txt', 'a')
-        else:
-            names_file = None
-        existing_ids = set()
-        if parse_ids and os.path.exists('userids.txt'):
-            with open('userids.txt') as f:
-                existing_ids = {u.strip() for u in f if u.strip()}
-            ids_file = open('userids.txt', 'a')
-        else:
-            ids_file = None
+        created_files = []
         for session, chat in targets:
             async with TelegramClient(session, api_id, api_hash) as client:
                 participants = await client.get_participants(chat)
-                for user in participants:
-                    if parse_names and user.username and 'bot' not in user.username.lower():
-                        uname = '@' + user.username
-                        if uname not in existing_names:
-                            names_file.write(uname + '\n')
-                            existing_names.add(uname)
-                    if parse_ids:
-                        uid = str(user.id)
-                        if uid not in existing_ids:
-                            ids_file.write(uid + '\n')
-                            existing_ids.add(uid)
-        if names_file:
-            names_file.close()
-        if ids_file:
-            ids_file.close()
-    await event.respond('Спаршено')
+            names = []
+            ids = []
+            for user in participants:
+                if parse_names and user.username and 'bot' not in user.username.lower():
+                    names.append('@' + user.username)
+                if parse_ids:
+                    ids.append(str(user.id))
+
+            prefix = re.sub(r"\W+", "_", chat.title)[:10]
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            if parse_names and names:
+                name_file = f"users_{prefix}_{timestamp}.txt"
+                with open(name_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(names))
+                created_files.append(name_file)
+            if parse_ids and ids:
+                id_file = f"ids_{prefix}_{timestamp}.txt"
+                with open(id_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(ids))
+                created_files.append(id_file)
+        msg = 'Спаршено'
+        if created_files:
+            msg += ': ' + ', '.join(created_files)
+        await event.respond(msg)
+
+
+@bot.on(events.NewMessage(pattern='/lists'))
+@notify_errors
+async def list_user_lists(event):
+    files = get_user_lists()
+    if not files:
+        await event.respond('Нет списков')
+        return
+    lines = [f'{i} - {name}' for i, name in enumerate(files)]
+    await event.respond('Списки:\n' + '\n'.join(lines))
+
+
+@bot.on(events.NewMessage(pattern='/del_list'))
+@notify_errors
+async def delete_list(event):
+    parts = event.raw_text.split()
+    if len(parts) < 2:
+        await event.respond('Использование: /del_list номер')
+        return
+    files = get_user_lists()
+    try:
+        fname = files[int(parts[1])]
+    except (ValueError, IndexError):
+        await event.respond('Неверный номер списка')
+        return
+    os.remove(fname)
+    await event.respond('Список удалён')
+
+
+@bot.on(events.NewMessage(pattern='/split'))
+@notify_errors
+async def split_list(event):
+    parts = event.raw_text.split()
+    if len(parts) < 3:
+        await event.respond('Использование: /split номер частей')
+        return
+    files = get_user_lists()
+    try:
+        fname = files[int(parts[1])]
+    except (ValueError, IndexError):
+        await event.respond('Неверный номер списка')
+        return
+    try:
+        pieces = int(parts[2])
+    except ValueError:
+        await event.respond('Неверное количество частей')
+        return
+    if pieces not in (2, 3, 4):
+        await event.respond('Допустимые варианты: 2, 3, 4')
+        return
+    with open(fname) as f:
+        users = [u.strip() for u in f if u.strip()]
+    if not users:
+        await event.respond('Список пуст')
+        return
+    base = fname.rsplit('.txt', 1)[0]
+    size = len(users) // pieces
+    rem = len(users) % pieces
+    start = 0
+    for i in range(pieces):
+        end = start + size + (1 if i < rem else 0)
+        part_file = f'{base}_part{i+1}.txt'
+        with open(part_file, 'w') as pf:
+            pf.write('\n'.join(users[start:end]))
+        start = end
+    await event.respond('Список разделён')
 
 @bot.on(events.NewMessage(pattern='/test'))
 @notify_errors
@@ -311,13 +390,20 @@ async def test(event):
 @bot.on(events.NewMessage(pattern='/send'))
 @notify_errors
 async def send_all(event):
+    parts = event.raw_text.split()
+    if len(parts) < 2:
+        await event.respond('Использование: /send номер')
+        return
+    files = get_user_lists()
+    try:
+        fname = files[int(parts[1])]
+    except (ValueError, IndexError):
+        await event.respond('Неверный номер списка')
+        return
     if not os.path.exists(MESSAGE_FILE):
         await event.respond('Сначала задайте текст через /set_message')
         return
-    if not os.path.exists('usernames.txt'):
-        await event.respond('Нет файла usernames.txt')
-        return
-    with open('usernames.txt') as f:
+    with open(fname) as f:
         users = [u.strip() for u in f if u.strip()]
     if not users:
         await event.respond('Нет пользователей для рассылки')
@@ -398,7 +484,7 @@ async def handle_user_file(event):
     if event.raw_text.startswith('/'):
         return
     if event.message.file and event.message.file.name.endswith('.txt'):
-        await event.message.download_media(file='usernames.txt')
-        await event.respond('Список пользователей обновлён')
+        await event.message.download_media(file=event.message.file.name)
+        await event.respond('Список пользователей сохранён')
 
 bot.run_until_disconnected()
