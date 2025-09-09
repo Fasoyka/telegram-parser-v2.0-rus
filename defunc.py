@@ -18,6 +18,10 @@ import re
 from datetime import datetime
 
 
+LISTS_DIR = 'lists'
+os.makedirs(LISTS_DIR, exist_ok=True)
+
+
 def _remove_admins_and_mods(client, index, participants):
     """Remove owners, moderators and editors from participant list."""
     admins = client.get_participants(index, filter=ChannelParticipantsAdmins)
@@ -52,14 +56,14 @@ def parsing(client, index: int, id: bool, name: bool):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     if name:
-        name_file = f"users_{prefix}_{timestamp}.txt"
+        name_file = os.path.join(LISTS_DIR, f"users_{prefix}_{timestamp}.txt")
         with open(name_file, 'w', encoding='utf-8') as f:
             for user in all_participants:
                 if user.username and 'bot' not in user.username.lower():
                     f.write('@' + user.username + '\n')
 
     if id:
-        id_file = f"ids_{prefix}_{timestamp}.txt"
+        id_file = os.path.join(LISTS_DIR, f"ids_{prefix}_{timestamp}.txt")
         with open(id_file, 'w', encoding='utf-8') as f:
             for user in all_participants:
                 f.write(str(user.id) + '\n')

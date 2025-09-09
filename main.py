@@ -11,6 +11,9 @@ from defunc import *
 import time
 import os
 
+LISTS_DIR = 'lists'
+os.makedirs(LISTS_DIR, exist_ok=True)
+
 if __name__ == "__main__":
     while True:
         options = getoptions()
@@ -90,10 +93,8 @@ if __name__ == "__main__":
             g_index = str(input())
 
             if g_index == 'clear':
-                f = open('usernames.txt', 'w')
-                f.close()
-                f = open('userids.txt', 'w')
-                f.close
+                open(os.path.join(LISTS_DIR, 'usernames.txt'), 'w').close()
+                open(os.path.join(LISTS_DIR, 'userids.txt'), 'w').close()
 
             elif int(g_index) < i + 1:
                 target_group = groups[int(g_index)]
