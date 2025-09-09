@@ -128,16 +128,33 @@ session_lock = asyncio.Lock()
 
 
 def parse_proxy(proxy_str):
+    """Parse proxy string and return Telethon-compatible tuple.
+
+    Supports the following formats::
+
+        host:port
+        host:port:user:password
+        host:port:rdns:user:password  # legacy form
+
+    Any ``rdns`` placeholder is ignored and the last two fields are treated as
+    credentials.  The returned tuple always contains exactly five items as
+    required by Telethon 1.40+.
+    """
+
     parts = proxy_str.split(':')
     host = parts[0]
     port = int(parts[1])
-    user = parts[2] if len(parts) > 2 else None
-    password = parts[3] if len(parts) > 3 else None
-    # Telethon expects a 5-item tuple: (type, host, port, username, password)
-    # Older versions accepted an ``rdns`` flag as the fourth item, but
-    # starting from Telethon 1.40 this causes a "too many values to unpack"
-    # error. Drop the ``rdns`` placeholder to keep compatibility.
-    return (socks.SOCKS5, host, port, user, password)
+
+    if len(parts) >= 5:
+        user = parts[-2] or None
+        password = parts[-1] or None
+    elif len(parts) >= 3:
+        user = parts[2] or None
+        password = parts[3] if len(parts) > 3 else None
+    else:
+        user = password = None
+
+    return socks.SOCKS5, host, port, user, password
 
 
 async def get_proxy_map():
