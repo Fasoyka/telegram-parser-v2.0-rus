@@ -681,7 +681,7 @@ async def test(event):
             proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
     await event.respond('Отправлено')
 
-@bot.on(events.NewMessage(pattern='/send'))
+@bot.on(events.NewMessage(pattern=r'/send(?:\s|$)'))
 @notify_errors
 async def send_all(event):
     parts = event.raw_text.split()
@@ -778,7 +778,7 @@ async def send_all(event):
             await event.respond('Рассылка завершена')
 
 
-@bot.on(events.NewMessage(pattern='/send_reply'))
+@bot.on(events.NewMessage(pattern=r'/send_reply(?:\s|$)'))
 @notify_errors
 async def send_reply(event):
     parts = event.raw_text.split()
