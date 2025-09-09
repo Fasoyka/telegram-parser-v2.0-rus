@@ -128,7 +128,7 @@ session_lock = asyncio.Lock()
 
 
 def parse_proxy(proxy_str):
-    """Convert a textual proxy definition into a dictionary.
+    """Convert a textual proxy definition into a structure understood by Telethon.
 
     ``proxy_str`` may be in any of the following common forms::
 
@@ -137,16 +137,21 @@ def parse_proxy(proxy_str):
         user:pass@host:port
         socks5://user:pass@host:port
 
-    The implementation relies on :func:`urllib.parse.urlparse` to deal with
-    corner cases such as IPv6 addresses or credentials containing ``:``.
-    Only SOCKS5 proxies are supported, which matches the expectations of the
-    rest of the project.  The returned mapping intentionally exposes just the
-    fields consumed by Telethon; omitting the ``rdns`` flag keeps the result
-    to five items and avoids ``ValueError: too many values to unpack`` errors
-    observed with the previous implementation.
+    To remain compatible with different Telethon releases, the function
+    returns a ``dict`` for modern versions (which accept keyword arguments)
+    and a ``tuple`` for older versions that unpack positional arguments.  In
+    either case the structure contains exactly the five fields expected by
+    Telethon (``proxy_type``, ``addr``, ``port``, ``username`` and
+    ``password``), omitting the optional ``rdns`` flag that previously led to
+    ``ValueError: too many values to unpack`` errors.
     """
 
     from urllib.parse import urlparse
+    from telethon.network.connection.connection import Connection
+    import inspect
+
+    # Determine whether the current Telethon expects keyword arguments.
+    _supports_dict = 'rdns' in inspect.signature(Connection._parse_proxy).parameters
 
     # Allow ``ip:port:user:pass`` format used by some proxy providers.
     if '@' not in proxy_str and proxy_str.count(':') == 3:
@@ -157,6 +162,18 @@ def parse_proxy(proxy_str):
             port = int(port)
         except ValueError:
             raise ValueError('Некорректный порт в прокси')
+    else:
+        if '://' not in proxy_str:
+            proxy_str = 'socks5://' + proxy_str
+        parsed = urlparse(proxy_str)
+        if not parsed.hostname or not parsed.port:
+            raise ValueError('Некорректный формат прокси')
+        host = parsed.hostname
+        port = parsed.port
+        username = parsed.username
+        password = parsed.password
+
+    if _supports_dict:
         return {
             'proxy_type': socks.SOCKS5,
             'addr': host,
@@ -164,21 +181,14 @@ def parse_proxy(proxy_str):
             'username': username,
             'password': password,
         }
-
-    if '://' not in proxy_str:
-        proxy_str = 'socks5://' + proxy_str
-
-    parsed = urlparse(proxy_str)
-    if not parsed.hostname or not parsed.port:
-        raise ValueError('Некорректный формат прокси')
-
-    return {
-        'proxy_type': socks.SOCKS5,
-        'addr': parsed.hostname,
-        'port': parsed.port,
-        'username': parsed.username,
-        'password': parsed.password,
-    }
+    else:
+        return (
+            socks.SOCKS5,
+            host,
+            port,
+            username,
+            password,
+        )
 
 
 async def get_proxy_map():
