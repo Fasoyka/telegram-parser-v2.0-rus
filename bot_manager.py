@@ -128,33 +128,47 @@ session_lock = asyncio.Lock()
 
 
 def parse_proxy(proxy_str):
-    """Parse proxy string and return Telethon-compatible tuple.
+    """Convert a proxy definition into a Telethon-friendly dict.
 
-    Supports the following formats::
+    The function understands several common formats::
 
         host:port
         host:port:user:password
-        host:port:rdns:user:password  # legacy form
+        host:port:rdns:user:password  # ``rdns`` is ignored
 
-    Any ``rdns`` placeholder is ignored and the last two fields are treated as
-    credentials.  The returned tuple always contains exactly five items as
-    required by Telethon 1.40+.
+    ``proxy_str`` may occasionally contain extra ``:`` characters (for
+    example inside IPv6 addresses or passwords). To be resilient the string
+    is split from the right side, limiting the number of processed parts to
+    five. Returning a dictionary with explicit field names avoids Telethon
+    misinterpreting the tuple order, which previously manifested as
+    ``ValueError: too many values to unpack (expected 5)``.
     """
 
-    parts = proxy_str.split(':')
+    parts = proxy_str.rsplit(':', 4)
+    if len(parts) < 2:
+        raise ValueError('Некорректный формат прокси')
+
     host = parts[0]
     port = int(parts[1])
+    user = password = None
 
-    if len(parts) >= 5:
-        user = parts[-2] or None
-        password = parts[-1] or None
-    elif len(parts) >= 3:
+    if len(parts) == 3:
         user = parts[2] or None
-        password = parts[3] if len(parts) > 3 else None
-    else:
-        user = password = None
+    elif len(parts) == 4:
+        user = parts[2] or None
+        password = parts[3] or None
+    elif len(parts) == 5:
+        user = parts[3] or None
+        password = parts[4] or None
 
-    return socks.SOCKS5, host, port, user, password
+    return {
+        'proxy_type': socks.SOCKS5,
+        'addr': host,
+        'port': port,
+        'rdns': True,
+        'username': user,
+        'password': password,
+    }
 
 
 async def get_proxy_map():
