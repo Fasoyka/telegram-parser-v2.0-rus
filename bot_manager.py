@@ -1,4 +1,5 @@
 from collections import deque
+from functools import wraps
 from telethon import TelegramClient, events
 import os
 import asyncio
@@ -19,7 +20,18 @@ async def get_sessions():
 # Храним состояние аккаунтов: ok или текст ошибки
 account_status = {}
 
+
+def notify_errors(func):
+    @wraps(func)
+    async def wrapper(event, *args, **kwargs):
+        try:
+            return await func(event, *args, **kwargs)
+        except Exception as e:
+            await event.respond(f'Ошибка: {type(e).__name__}: {e}')
+    return wrapper
+
 @bot.on(events.NewMessage(pattern='/start'))
+@notify_errors
 async def start(event):
     await event.respond(
         '/stats - статистика\n'
@@ -31,6 +43,7 @@ async def start(event):
     )
 
 @bot.on(events.NewMessage(pattern='/stats'))
+@notify_errors
 async def stats(event):
     sessions = await get_sessions()
     user_count = 0
@@ -44,6 +57,7 @@ async def stats(event):
     await event.respond('Аккаунты:\n' + '\n'.join(lines) + f'\nПользователей: {user_count}')
 
 @bot.on(events.NewMessage(pattern='/set_message'))
+@notify_errors
 async def set_message(event):
     parts = event.raw_text.split(' ', 1)
     if len(parts) < 2:
@@ -55,6 +69,7 @@ async def set_message(event):
 
 
 @bot.on(events.NewMessage(pattern='/add_user'))
+@notify_errors
 async def add_user(event):
     parts = event.raw_text.split(' ', 1)
     if len(parts) < 2:
@@ -66,11 +81,22 @@ async def add_user(event):
 
 
 @bot.on(events.NewMessage(pattern='/clear_users'))
+@notify_errors
 async def clear_users(event):
     open('usernames.txt', 'w').close()
     await event.respond('Список пользователей очищен')
 
+
+@bot.on(events.NewMessage(pattern='/users'))
+@notify_errors
+async def send_users_file(event):
+    if os.path.exists('usernames.txt'):
+        await event.respond(file='usernames.txt')
+    else:
+        await event.respond('Файл usernames.txt не найден')
+
 @bot.on(events.NewMessage(pattern='/test'))
+@notify_errors
 async def test(event):
     parts = event.raw_text.split(' ', 1)
     if len(parts) < 2:
@@ -92,6 +118,7 @@ async def test(event):
     await event.respond('Отправлено')
 
 @bot.on(events.NewMessage(pattern='/send'))
+@notify_errors
 async def send_all(event):
     if not os.path.exists(MESSAGE_FILE):
         await event.respond('Сначала задайте текст через /set_message')
@@ -128,16 +155,19 @@ async def send_all(event):
 
     queue = deque(clients.items())
     failed_users = []
+    log_lines = []
 
     for user in users:
         delivered = False
         attempts = 0
+        error_text = ''
         while queue and attempts < len(queue):
             session, client = queue[0]
             try:
                 await client.send_message(user, msg)
                 queue.rotate(-1)
                 delivered = True
+                log_lines.append(f'{user}: delivered')
                 await asyncio.sleep(1)
                 break
             except Exception as e:
@@ -145,15 +175,38 @@ async def send_all(event):
                 account_status[session] = f'error: {type(e).__name__}'
                 queue.popleft()
                 attempts += 1
+                error_text = f'{type(e).__name__}: {e}'
         if not delivered:
             failed_users.append(user)
+            log_lines.append(f'{user}: {error_text or "failed"}')
 
     for _, client in queue:
         await client.disconnect()
+
+    with open('send_log.txt', 'w') as log_file:
+        log_file.write('\n'.join(log_lines))
 
     if failed_users:
         await event.respond('Не доставлено: ' + ', '.join(failed_users))
     else:
         await event.respond('Рассылка завершена')
+
+@bot.on(events.NewMessage(pattern='/end'))
+@notify_errors
+async def send_log(event):
+    if os.path.exists('send_log.txt'):
+        await event.respond(file='send_log.txt')
+    else:
+        await event.respond('Лог файл не найден')
+
+# Приём текстового файла со списком пользователей
+@bot.on(events.NewMessage)
+@notify_errors
+async def handle_user_file(event):
+    if event.raw_text.startswith('/'):
+        return
+    if event.message.file and event.message.file.name.endswith('.txt'):
+        await event.message.download_media(file='usernames.txt')
+        await event.respond('Список пользователей обновлён')
 
 bot.run_until_disconnected()
