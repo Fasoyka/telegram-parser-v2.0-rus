@@ -13,6 +13,8 @@ from defunc import getoptions, clear_user_lists, LISTS_DIR
 
 USER_FILE = os.path.join(LISTS_DIR, 'usernames.txt')
 MESSAGE_FILE = 'message.txt'
+MESSAGE1_FILE = 'message1.txt'
+MESSAGE2_FILE = 'message2.txt'
 
 options = getoptions()
 api_id = int(options[0].strip())
@@ -71,6 +73,21 @@ def get_user_lists():
         if f.endswith('.txt')
     )
 
+
+async def reply_watcher(client, usernames, msg2, duration=3600):
+    async def handler(event):
+        sender = await event.get_sender()
+        username = getattr(sender, 'username', None)
+        if username and username.lower() in usernames:
+            await event.reply(msg2)
+            usernames.remove(username.lower())
+    client.add_event_handler(handler, events.NewMessage(incoming=True))
+    try:
+        await asyncio.sleep(duration)
+    finally:
+        client.remove_event_handler(handler)
+        await client.disconnect()
+
 # Храним состояние аккаунтов: ok или текст ошибки
 account_status = {}
 proxy_status = {}
@@ -120,6 +137,8 @@ async def start(event):
         'Выберите команду на клавиатуре ниже.\n'
         'Для команд с параметрами используйте ввод вручную:\n'
         '/set_message <текст> - текст рассылки\n'
+        '/set_message1 <текст> - сообщение #1\n'
+        '/set_message2 <текст> - сообщение #2\n'
         '/set_delay <сек> - задержка между сообщениями\n'
         '/add_user <username> - добавить пользователя\n'
         '/users <номер> - отправить список\n'
@@ -128,6 +147,7 @@ async def start(event):
         '/split <номер> <частей> - разделить список\n'
         '/test <username> - тестовая отправка\n'
         '/send <номер> - запустить рассылку\n'
+        '/send_reply <номер> - рассылка с ответом\n'
         '/del_session <имя> - удалить сессию\n'
         '/add_proxy <прокси> - заменить список прокси (несколько через перенос строки)\n'
         '/ping_proxy - проверить прокси\n'
@@ -288,6 +308,30 @@ async def set_message(event):
     with open(MESSAGE_FILE, 'w') as f:
         f.write(parts[1])
     await event.respond('Текст сохранён')
+
+
+@bot.on(events.NewMessage(pattern='/set_message1'))
+@notify_errors
+async def set_message1(event):
+    parts = event.raw_text.split(' ', 1)
+    if len(parts) < 2:
+        await event.respond('Использование: /set_message1 текст')
+        return
+    with open(MESSAGE1_FILE, 'w') as f:
+        f.write(parts[1])
+    await event.respond('Сообщение #1 сохранено')
+
+
+@bot.on(events.NewMessage(pattern='/set_message2'))
+@notify_errors
+async def set_message2(event):
+    parts = event.raw_text.split(' ', 1)
+    if len(parts) < 2:
+        await event.respond('Использование: /set_message2 текст')
+        return
+    with open(MESSAGE2_FILE, 'w') as f:
+        f.write(parts[1])
+    await event.respond('Сообщение #2 сохранено')
 
 
 @bot.on(events.NewMessage(pattern='/set_delay'))
@@ -643,6 +687,110 @@ async def send_all(event):
             await event.respond('Не доставлено: ' + ', '.join(failed_users))
         else:
             await event.respond('Рассылка завершена')
+
+
+@bot.on(events.NewMessage(pattern='/send_reply'))
+@notify_errors
+async def send_reply(event):
+    parts = event.raw_text.split()
+    if len(parts) < 2:
+        await event.respond('Использование: /send_reply номер')
+        return
+    files = get_user_lists()
+    try:
+        fname = files[int(parts[1])]
+    except (ValueError, IndexError):
+        await event.respond('Неверный номер списка')
+        return
+    if not os.path.exists(MESSAGE1_FILE) or not os.path.exists(MESSAGE2_FILE):
+        await event.respond('Сначала задайте тексты через /set_message1 и /set_message2')
+        return
+    with open(fname) as f:
+        users = [u.strip() for u in f if u.strip()]
+    if not users:
+        await event.respond('Нет пользователей для рассылки')
+        return
+    async with session_lock:
+        proxy_map = await get_proxy_map()
+        sessions = await get_sessions()
+        if not sessions:
+            await event.respond('Нет аккаунтов')
+            return
+        with open(MESSAGE1_FILE) as f:
+            msg1 = f.read()
+        with open(MESSAGE2_FILE) as f:
+            msg2 = f.read()
+
+        clients = {}
+        pending = {}
+        account_status.clear()
+        for session in sessions:
+            proxy_str = proxy_map.get(session)
+            if not proxy_str:
+                account_status[session] = 'no proxy'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                continue
+            client = TelegramClient(session, api_id, api_hash, proxy=parse_proxy(proxy_str))
+            try:
+                await client.start()
+                clients[session] = client
+                pending[client] = set()
+                account_status[session] = 'ok'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+            except Exception as e:
+                account_status[session] = f'error: {type(e).__name__}'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+
+        if not clients:
+            await event.respond('Нет рабочих аккаунтов')
+            return
+
+        queue = deque(clients.items())
+        failed_users = []
+        log_lines = []
+
+        for user in users:
+            delivered = False
+            attempts = 0
+            error_text = ''
+            username_clean = user.lstrip('@')
+            personalized = msg1.replace('[имя]', username_clean)
+            while queue and attempts < len(queue):
+                session, client = queue[0]
+                try:
+                    await client.send_message(user, personalized)
+                    queue.rotate(-1)
+                    delivered = True
+                    log_lines.append(f'{user}: delivered')
+                    pending[client].add(username_clean.lower())
+                    await asyncio.sleep(message_delay)
+                    break
+                except Exception as e:
+                    await client.disconnect()
+                    account_status[session] = f'error: {type(e).__name__}'
+                    proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                    queue.popleft()
+                    clients.pop(session, None)
+                    attempts += 1
+                    error_text = f'{type(e).__name__}: {e}'
+            if not delivered:
+                failed_users.append(user)
+                log_lines.append(f'{user}: {error_text or "failed"}')
+
+        for session, client in clients.items():
+            usernames = pending.get(client, set())
+            if usernames:
+                asyncio.create_task(reply_watcher(client, usernames, msg2))
+            else:
+                await client.disconnect()
+
+        with open('send_log.txt', 'w') as log_file:
+            log_file.write('\n'.join(log_lines))
+
+        if failed_users:
+            await event.respond('Не доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато')
+        else:
+            await event.respond('Рассылка завершена. Ожидание ответов начато')
 
 @bot.on(events.NewMessage(pattern='/end|Логи отправки'))
 @notify_errors
