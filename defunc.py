@@ -15,6 +15,7 @@ from telethon.tl.types import (
 import os
 import time
 import re
+import zipfile
 from datetime import datetime
 
 
@@ -94,9 +95,10 @@ def config():
                          f"4 - Парсить user-name [{options[3].replace('\n', '')}]\n"
                          f"5 - Обновить bot_token [{options[4].replace('\n', '')}]\n"
                          f"6 - Добавить аккаунт юзербота[{len(sessions)}]\n"
-                          "7 - Сбросить настройки\n"
-                          "e - Выход\n"
-                          "Ввод: ")
+                         "7 - Массово добавить аккаунты (.zip)\n"
+                         "8 - Сбросить настройки\n"
+                         "e - Выход\n"
+                         "Ввод: ")
                     ))
 
         if key == '1':
@@ -139,6 +141,27 @@ def config():
                                     options[1].replace('\n', '')).start(phone)
 
         elif key == '7':
+            os.system('cls||clear')
+            zip_path = input("Введите путь к .zip файлу с .session: ").strip()
+            if not (zip_path.endswith('.zip') and os.path.isfile(zip_path)):
+                print('Файл не найден или имеет неверное расширение.')
+                time.sleep(2)
+                continue
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    session_files = [f for f in zf.namelist() if f.endswith('.session')]
+                    for member in session_files:
+                        with zf.open(member) as src, open(os.path.basename(member), 'wb') as dst:
+                            dst.write(src.read())
+                if session_files:
+                    print(f"Добавлено {len(session_files)} сессий.")
+                else:
+                    print('В архиве нет .session файлов.')
+            except Exception as e:
+                print(f'Ошибка распаковки: {e}')
+            time.sleep(2)
+
+        elif key == '8':
             os.system('cls||clear')
             answer = input("Вы уверены?\nAPI_ID и API_HASH будут удалены\n"
                            "1 - Удалить\n2 - Назад\n"
