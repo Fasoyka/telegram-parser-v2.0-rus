@@ -113,32 +113,38 @@ async def list_chats(event):
     if not sessions:
         await event.respond('Нет аккаунтов')
         return
-    client = TelegramClient(sessions[0], api_id, api_hash)
-    await client.start()
-    result = await client(
-        GetDialogsRequest(
-            offset_date=None,
-            offset_id=0,
-            offset_peer=InputPeerEmpty(),
-            limit=200,
-            hash=0,
-        )
-    )
-    chats = result.chats
     groups = []
-    for chat in chats:
+    chat_map = []
+    seen_ids = set()
+    for session in sessions:
+        client = TelegramClient(session, api_id, api_hash)
         try:
-            if chat.megagroup:
-                groups.append(chat)
-        except AttributeError:
-            continue
-    await client.disconnect()
-    if not groups:
+            await client.start()
+            result = await client(
+                GetDialogsRequest(
+                    offset_date=None,
+                    offset_id=0,
+                    offset_peer=InputPeerEmpty(),
+                    limit=200,
+                    hash=0,
+                )
+            )
+            for chat in result.chats:
+                try:
+                    if chat.megagroup and chat.id not in seen_ids:
+                        seen_ids.add(chat.id)
+                        groups.append(f"{chat.title} ({session})")
+                        chat_map.append((session, chat))
+                except AttributeError:
+                    continue
+        finally:
+            await client.disconnect()
+    if not chat_map:
         await event.respond('Нет доступных групп')
         return
     global available_chats
-    available_chats = groups
-    lines = [f'{i} - {g.title}' for i, g in enumerate(groups)]
+    available_chats = chat_map
+    lines = [f'{i} - {title}' for i, title in enumerate(groups)]
     await event.respond('Доступные чаты:\n' + '\n'.join(lines) + '\nИспользуйте /parse <номер>')
 
 
@@ -161,12 +167,6 @@ async def parse_command(event):
         except (ValueError, IndexError):
             await event.respond('Неверный номер чата')
             return
-    sessions = await get_sessions()
-    if not sessions:
-        await event.respond('Нет аккаунтов')
-        return
-    client = TelegramClient(sessions[0], api_id, api_hash)
-    await client.start()
     opts = getoptions()
     parse_ids = opts[2].strip() == 'True'
     parse_names = opts[3].strip() == 'True'
@@ -184,24 +184,28 @@ async def parse_command(event):
         ids_file = open('userids.txt', 'a')
     else:
         ids_file = None
-    for chat in targets:
-        participants = await client.get_participants(chat)
-        for user in participants:
-            if parse_names and user.username and 'bot' not in user.username.lower():
-                uname = '@' + user.username
-                if uname not in existing_names:
-                    names_file.write(uname + '\n')
-                    existing_names.add(uname)
-            if parse_ids:
-                uid = str(user.id)
-                if uid not in existing_ids:
-                    ids_file.write(uid + '\n')
-                    existing_ids.add(uid)
+    for session, chat in targets:
+        client = TelegramClient(session, api_id, api_hash)
+        try:
+            await client.start()
+            participants = await client.get_participants(chat)
+            for user in participants:
+                if parse_names and user.username and 'bot' not in user.username.lower():
+                    uname = '@' + user.username
+                    if uname not in existing_names:
+                        names_file.write(uname + '\n')
+                        existing_names.add(uname)
+                if parse_ids:
+                    uid = str(user.id)
+                    if uid not in existing_ids:
+                        ids_file.write(uid + '\n')
+                        existing_ids.add(uid)
+        finally:
+            await client.disconnect()
     if names_file:
         names_file.close()
     if ids_file:
         ids_file.close()
-    await client.disconnect()
     await event.respond('Спаршено')
 
 @bot.on(events.NewMessage(pattern='/test'))
