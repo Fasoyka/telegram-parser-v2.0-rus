@@ -11,9 +11,6 @@ from defunc import *
 import time
 import os
 
-LISTS_DIR = 'lists'
-os.makedirs(LISTS_DIR, exist_ok=True)
-
 if __name__ == "__main__":
     while True:
         options = getoptions()
