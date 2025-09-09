@@ -276,24 +276,39 @@ async def add_session(event):
 @bot.on(events.NewMessage(pattern='/add_zip|Добавить архив'))
 @notify_errors
 async def add_zip(event):
-    if not (event.message.file and event.message.file.name.endswith('.zip')):
-        await event.respond('Отправьте .zip архив с сессиями')
-        return
-
-    data = BytesIO()
-    await event.message.download_media(file=data)
-    data.seek(0)
-    count = 0
-    async with session_lock:
-        with zipfile.ZipFile(data) as zf:
-            for name in zf.namelist():
-                if name.endswith('.session'):
+    async def process(message, send):
+        await send('Архив принят, обрабатывается...')
+        data = BytesIO()
+        await message.download_media(file=data)
+        data.seek(0)
+        async with session_lock:
+            with zipfile.ZipFile(data) as zf:
+                session_files = [n for n in zf.namelist() if n.endswith('.session')]
+                if not session_files:
+                    await send('Ошибка: .session файлы не найдены')
+                    return
+                await send(
+                    f'Архив обработан, найдено сессий: {len(session_files)}. Импортирую...'
+                )
+                for name in session_files:
                     dest = os.path.join(SESSIONS_DIR, os.path.basename(name))
                     with zf.open(name) as src, open(dest, 'wb') as dst:
                         dst.write(src.read())
                     account_status[os.path.basename(name)] = 'ok'
-                    count += 1
-    await event.respond(f'Импортировано сессий: {count}')
+        await send(f'Импортировано сессий: {len(session_files)}')
+
+    # Если архив отправлен вместе с командой
+    if event.message.file and event.message.file.name.endswith('.zip'):
+        await process(event.message, event.respond)
+        return
+
+    await event.respond('Отправьте .zip архив с сессиями')
+    async with bot.conversation(event.chat_id, timeout=60) as conv:
+        response = await conv.get_response()
+        if response.message.file and response.message.file.name.endswith('.zip'):
+            await process(response.message, conv.send_message)
+        else:
+            await conv.send_message('Ошибка: архив не получен')
 
 
 @bot.on(events.NewMessage(pattern='/add_proxy|Добавить прокси'))
