@@ -76,7 +76,7 @@ def get_user_lists():
     )
 
 
-async def reply_watcher(client, usernames, msg2, duration=3600):
+async def reply_watcher(client, usernames, msg2, duration=86400):
     start_time = datetime.now(timezone.utc)
 
     async def handler(event):
@@ -798,9 +798,8 @@ async def send_reply(event):
     if not users:
         await event.respond('Нет пользователей для рассылки')
         return
-    for task in reply_tasks:
-        task.cancel()
-    reply_tasks.clear()
+    # Remove completed reply tasks but keep active ones
+    reply_tasks[:] = [t for t in reply_tasks if not t.done()]
 
     async with session_lock:
         proxy_map = await get_proxy_map()
