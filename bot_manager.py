@@ -771,10 +771,18 @@ async def send_all(event):
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
 
+        total = len(users)
+        delivered_count = total - len(failed_users)
+        failed_count = len(failed_users)
+        stats = (
+            f'Всего пользователей: {total}\n'
+            f'Доставлено: {delivered_count}\n'
+            f'Ошибок: {failed_count}'
+        )
         if failed_users:
-            await event.respond('Не доставлено: ' + ', '.join(failed_users))
+            await event.respond(stats + '\nНе доставлено: ' + ', '.join(failed_users))
         else:
-            await event.respond('Рассылка завершена')
+            await event.respond('Рассылка завершена\n' + stats)
 
 
 @bot.on(events.NewMessage(pattern=r'/send_reply(?:\s|$)'))
@@ -884,10 +892,20 @@ async def send_reply(event):
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
 
+        total = len(users)
+        delivered_count = total - len(failed_users)
+        failed_count = len(failed_users)
+        stats = (
+            f'Всего пользователей: {total}\n'
+            f'Доставлено: {delivered_count}\n'
+            f'Ошибок: {failed_count}'
+        )
         if failed_users:
-            await event.respond('Не доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато')
+            await event.respond(
+                stats + '\nНе доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато'
+            )
         else:
-            await event.respond('Рассылка завершена. Ожидание ответов начато')
+            await event.respond('Рассылка завершена. Ожидание ответов начато\n' + stats)
 
 @bot.on(events.NewMessage(pattern='/end|Логи отправки'))
 @notify_errors
