@@ -5,16 +5,41 @@ with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 '''
 
 from telethon.sync import TelegramClient
-from telethon.tl.types import ChannelParticipantsAdmins
+from telethon.tl.types import (
+    ChannelParticipantsAdmins,
+    ChannelParticipantAdmin,
+    ChannelParticipantCreator,
+    ChatParticipantAdmin,
+    ChatParticipantCreator,
+)
 import os
 import time
 
 
 def _remove_admins_and_mods(client, index, participants):
-    """Remove administrators and moderators from participant list."""
+    """Remove owners, moderators and editors from participant list."""
     admins = client.get_participants(index, filter=ChannelParticipantsAdmins)
     admin_ids = {admin.id for admin in admins}
-    return [user for user in participants if user.id not in admin_ids]
+    filtered = []
+    for user in participants:
+        if user.id in admin_ids:
+            continue
+        try:
+            perms = client.get_permissions(index, user.id)
+            if isinstance(
+                perms,
+                (
+                    ChannelParticipantAdmin,
+                    ChannelParticipantCreator,
+                    ChatParticipantAdmin,
+                    ChatParticipantCreator,
+                ),
+            ):
+                continue
+        except Exception:
+            pass
+        filtered.append(user)
+    return filtered
 
 def parsing(client, index: int, id: bool, name: bool):
     all_participants = []
