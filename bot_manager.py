@@ -95,7 +95,7 @@ async def start(event):
     keyboard = [
         [Button.text('Статистика', resize=True), Button.text('Чаты')],
         [Button.text('Списки'), Button.text('Очистить пользователей')],
-        [Button.text('Завершить'), Button.text('Сессии')],
+        [Button.text('Логи отправки'), Button.text('Сессии')],
         [Button.text('Добавить сессию'), Button.text('Добавить прокси')],
         [Button.text('Пинг прокси')],
     ]
