@@ -57,9 +57,10 @@ def notify_errors(func):
 @notify_errors
 async def start(event):
     keyboard = [
-        [Button.text('/stats'), Button.text('/chats'), Button.text('/lists')],
-        [Button.text('/clear_users'), Button.text('/end'), Button.text('/sessions')],
-        [Button.text('/add_session')],
+        [Button.text('Статистика', resize=True), Button.text('Чаты')],
+        [Button.text('Списки'), Button.text('Очистить пользователей')],
+        [Button.text('Завершить'), Button.text('Сессии')],
+        [Button.text('Добавить сессию')],
     ]
     await event.respond(
         'Выберите команду на клавиатуре ниже.\n'
@@ -76,7 +77,7 @@ async def start(event):
         buttons=keyboard,
     )
 
-@bot.on(events.NewMessage(pattern='/stats'))
+@bot.on(events.NewMessage(pattern='/stats|Статистика'))
 @notify_errors
 async def stats(event):
     sessions = await get_sessions()
@@ -91,7 +92,7 @@ async def stats(event):
     await event.respond('Аккаунты:\n' + '\n'.join(lines) + f'\nПользователей: {user_count}')
 
 
-@bot.on(events.NewMessage(pattern='/sessions'))
+@bot.on(events.NewMessage(pattern='/sessions|Сессии'))
 @notify_errors
 async def list_sessions_cmd(event):
     sessions = await get_sessions()
@@ -123,7 +124,7 @@ async def del_session(event):
             await event.respond('Сессия не найдена')
 
 
-@bot.on(events.NewMessage(pattern='/add_session'))
+@bot.on(events.NewMessage(pattern='/add_session|Добавить сессию'))
 @notify_errors
 async def add_session(event):
     # Если пришёл файл .session, сохраняем его как раньше
@@ -181,7 +182,7 @@ async def add_user(event):
     await event.respond('Пользователь добавлен')
 
 
-@bot.on(events.NewMessage(pattern='/clear_users'))
+@bot.on(events.NewMessage(pattern='/clear_users|Очистить пользователей'))
 @notify_errors
 async def clear_users(event):
     open(USER_FILE, 'w').close()
@@ -207,7 +208,7 @@ async def send_users_file(event):
         await event.respond('Файл пуст')
 
 
-@bot.on(events.NewMessage(pattern='/chats'))
+@bot.on(events.NewMessage(pattern='/chats|Чаты'))
 @notify_errors
 async def list_chats(event):
     async with session_lock:
@@ -307,7 +308,7 @@ async def parse_command(event):
         await event.respond(msg)
 
 
-@bot.on(events.NewMessage(pattern='/lists'))
+@bot.on(events.NewMessage(pattern='/lists|Списки'))
 @notify_errors
 async def list_user_lists(event):
     files = get_user_lists()
@@ -476,7 +477,7 @@ async def send_all(event):
         else:
             await event.respond('Рассылка завершена')
 
-@bot.on(events.NewMessage(pattern='/end'))
+@bot.on(events.NewMessage(pattern='/end|Завершить'))
 @notify_errors
 async def send_log(event):
     if os.path.exists('send_log.txt'):
