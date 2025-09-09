@@ -52,7 +52,10 @@ async def start(event):
         '/parse <номер> - спарсить чат\n'
         '/test <username> - тестовая отправка\n'
         '/send - запустить рассылку\n'
-        '/end - лог рассылки'
+        '/end - лог рассылки\n'
+        '/sessions - список сессий\n'
+        '/del_session <имя> - удалить сессию\n'
+        '/add_session - отправьте .session файл'
     )
 
 @bot.on(events.NewMessage(pattern='/stats'))
@@ -68,6 +71,49 @@ async def stats(event):
         status = account_status.get(s, 'unknown')
         lines.append(f'{s}: {status}')
     await event.respond('Аккаунты:\n' + '\n'.join(lines) + f'\nПользователей: {user_count}')
+
+
+@bot.on(events.NewMessage(pattern='/sessions'))
+@notify_errors
+async def list_sessions_cmd(event):
+    sessions = await get_sessions()
+    if sessions:
+        await event.respond('Сессии:\n' + '\n'.join(sessions))
+    else:
+        await event.respond('Нет сессий')
+
+
+@bot.on(events.NewMessage(pattern='/del_session'))
+@notify_errors
+async def del_session(event):
+    parts = event.raw_text.split(maxsplit=1)
+    if len(parts) < 2:
+        await event.respond('Использование: /del_session имя')
+        return
+    name = parts[1].strip()
+    if not name.endswith('.session'):
+        name += '.session'
+    if name == 'manager_bot.session':
+        await event.respond('Нельзя удалить сессию менеджера')
+        return
+    async with session_lock:
+        if os.path.exists(name):
+            os.remove(name)
+            account_status.pop(name, None)
+            await event.respond('Сессия удалена')
+        else:
+            await event.respond('Сессия не найдена')
+
+
+@bot.on(events.NewMessage(pattern='/add_session'))
+@notify_errors
+async def add_session(event):
+    if not event.message.file or not event.message.file.name.endswith('.session'):
+        await event.respond('Пришлите файл .session вместе с командой')
+        return
+    async with session_lock:
+        await event.message.download_media(file=event.message.file.name)
+    await event.respond('Сессия добавлена')
 
 @bot.on(events.NewMessage(pattern='/set_message'))
 @notify_errors
