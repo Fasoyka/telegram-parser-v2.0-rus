@@ -111,7 +111,7 @@ async def start(event):
         '/test <username> - тестовая отправка\n'
         '/send <номер> - запустить рассылку\n'
         '/del_session <имя> - удалить сессию\n'
-        '/add_proxy <прокси> - добавить прокси (несколько через перенос строки)\n'
+        '/add_proxy <прокси> - заменить список прокси (несколько через перенос строки)\n'
         '/ping_proxy - проверить прокси\n'
         '/get_proxy - скачать список прокси',
         buttons=keyboard,
@@ -222,15 +222,9 @@ async def add_proxy(event):
     if not lines:
         await event.respond('Отправьте /add_proxy и список прокси в следующих строках')
         return
-    proxies = load_proxies()
-    count = 0
-    for line in lines:
-        line = line.strip()
-        if line:
-            proxies.append(line)
-            count += 1
+    proxies = [line.strip() for line in lines if line.strip()]
     save_proxies(proxies)
-    await event.respond(f'Добавлено прокси: {count}')
+    await event.respond(f'Добавлено прокси: {len(proxies)}')
 
 
 @bot.on(events.NewMessage(pattern='/ping_proxy|Пинг прокси'))
