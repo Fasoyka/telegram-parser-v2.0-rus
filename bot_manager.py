@@ -307,12 +307,11 @@ async def add_zip(event):
     if event.message.file and event.message.file.name.endswith('.zip'):
         await process(event.message, event.respond)
         return
-
-    await event.respond('Отправьте .zip архив с сессиями')
     async with bot.conversation(event.chat_id, timeout=60) as conv:
+        await conv.send_message('Отправьте .zip архив с сессиями')
         response = await conv.get_response()
-        if response.message.file and response.message.file.name.endswith('.zip'):
-            await process(response.message, conv.send_message)
+        if response.file and response.file.name.endswith('.zip'):
+            await process(response, conv.send_message)
         else:
             await conv.send_message('Ошибка: архив не получен')
 
