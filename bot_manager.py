@@ -1,7 +1,7 @@
 from collections import deque
 from functools import wraps
 from telethon import TelegramClient, events
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, MessageTooLongError
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
 import os
@@ -219,7 +219,15 @@ async def list_chats(event):
         global available_chats
         available_chats = chat_map
         lines = [f'{i} - {title}' for i, title in enumerate(groups)]
-        await event.respond('Доступные чаты:\n' + '\n'.join(lines) + '\nИспользуйте /parse <номер>')
+        message = 'Доступные чаты:\n' + '\n'.join(lines) + '\nИспользуйте /parse <номер>'
+        try:
+            await event.respond(message)
+        except MessageTooLongError:
+            filename = 'chats.txt'
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(message)
+            await event.respond('Список чатов слишком длинный, отправляю файлом:', file=filename)
+            os.remove(filename)
 
 
 @bot.on(events.NewMessage(pattern='/parse'))
