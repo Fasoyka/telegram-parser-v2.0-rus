@@ -8,6 +8,8 @@ import os
 import asyncio
 import re
 from datetime import datetime
+import zipfile
+from io import BytesIO
 import socks
 from defunc import getoptions, clear_user_lists, LISTS_DIR, SESSIONS_DIR
 
@@ -149,6 +151,7 @@ async def start(event):
         '/send <номер> - запустить рассылку\n'
         '/send_reply <номер> - рассылка с ответом\n'
         '/del_session <имя> - удалить сессию\n'
+        '/add_session - добавить .session или .zip архив с сессиями\n'
         '/add_proxy <прокси> - заменить список прокси (несколько через перенос строки)\n'
         '/ping_proxy - проверить прокси\n'
         '/get_proxy - скачать список прокси',
@@ -222,13 +225,36 @@ async def del_session(event):
 @bot.on(events.NewMessage(pattern='/add_session|Добавить сессию'))
 @notify_errors
 async def add_session(event):
-    # Если пришёл файл .session, сохраняем его как раньше
-    if event.message.file and event.message.file.name.endswith('.session'):
-        async with session_lock:
-            dest = os.path.join(SESSIONS_DIR, event.message.file.name)
-            await event.message.download_media(file=dest)
-        await event.respond('Сессия добавлена')
-        return
+    # Если пришёл файл, обрабатываем его
+    if event.message.file:
+        filename = event.message.file.name
+
+        # Один .session файл
+        if filename.endswith('.session'):
+            async with session_lock:
+                dest = os.path.join(SESSIONS_DIR, filename)
+                await event.message.download_media(file=dest)
+            account_status[filename] = 'ok'
+            await event.respond('Сессия добавлена')
+            return
+
+        # Архив с множеством .session файлов
+        if filename.endswith('.zip'):
+            data = BytesIO()
+            await event.message.download_media(file=data)
+            data.seek(0)
+            count = 0
+            async with session_lock:
+                with zipfile.ZipFile(data) as zf:
+                    for name in zf.namelist():
+                        if name.endswith('.session'):
+                            dest = os.path.join(SESSIONS_DIR, os.path.basename(name))
+                            with zf.open(name) as src, open(dest, 'wb') as dst:
+                                dst.write(src.read())
+                            account_status[os.path.basename(name)] = 'ok'
+                            count += 1
+            await event.respond(f'Импортировано сессий: {count}')
+            return
 
     # Иначе запускаем интерактивное добавление через телефон
     async with bot.conversation(event.chat_id, timeout=120) as conv:
