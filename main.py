@@ -53,7 +53,7 @@ if __name__ == "__main__":
                 "(Аккаунт который состоит в группах, которые нужно спарсить)\n")
 
             sessions = []
-            for file in os.listdir('.'):
+            for file in os.listdir(SESSIONS_DIR):
                 if file.endswith('.session'):
                     sessions.append(file)
 
@@ -62,7 +62,12 @@ if __name__ == "__main__":
                 print(f"[{i}] -", sessions[i], '\n')
             i = int(input("Ввод: "))
             
-            client = TelegramClient(sessions[i].replace('\n', ''), api_id, api_hash).start(sessions[i].replace('\n', ''))
+            session_name = sessions[i].replace('\n', '')
+            client = TelegramClient(
+                os.path.join(SESSIONS_DIR, session_name),
+                api_id,
+                api_hash,
+            ).start(session_name)
 
             result = client(GetDialogsRequest(
                 offset_date=last_date,

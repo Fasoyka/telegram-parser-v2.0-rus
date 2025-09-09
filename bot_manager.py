@@ -9,7 +9,7 @@ import asyncio
 import re
 from datetime import datetime
 import socks
-from defunc import getoptions, clear_user_lists, LISTS_DIR
+from defunc import getoptions, clear_user_lists, LISTS_DIR, SESSIONS_DIR
 
 USER_FILE = os.path.join(LISTS_DIR, 'usernames.txt')
 MESSAGE_FILE = 'message.txt'
@@ -48,8 +48,8 @@ message_delay = load_delay()
 async def get_sessions():
     return sorted(
         f
-        for f in os.listdir('.')
-        if f.endswith('.session') and f != 'manager_bot.session'
+        for f in os.listdir(SESSIONS_DIR)
+        if f.endswith('.session')
     )
 
 
@@ -210,8 +210,9 @@ async def del_session(event):
         await event.respond('Нельзя удалить сессию менеджера')
         return
     async with session_lock:
-        if os.path.exists(name):
-            os.remove(name)
+        path = os.path.join(SESSIONS_DIR, name)
+        if os.path.exists(path):
+            os.remove(path)
             account_status.pop(name, None)
             await event.respond('Сессия удалена')
         else:
@@ -224,7 +225,8 @@ async def add_session(event):
     # Если пришёл файл .session, сохраняем его как раньше
     if event.message.file and event.message.file.name.endswith('.session'):
         async with session_lock:
-            await event.message.download_media(file=event.message.file.name)
+            dest = os.path.join(SESSIONS_DIR, event.message.file.name)
+            await event.message.download_media(file=dest)
         await event.respond('Сессия добавлена')
         return
 
@@ -233,7 +235,7 @@ async def add_session(event):
         await conv.send_message('Введите номер телефона в формате +79990000000')
         phone = (await conv.get_response()).raw_text.strip()
         session_name = phone.replace('+', '').replace(' ', '')
-        client = TelegramClient(session_name, api_id, api_hash)
+        client = TelegramClient(os.path.join(SESSIONS_DIR, session_name), api_id, api_hash)
         await client.connect()
         try:
             await client.send_code_request(phone)
@@ -277,7 +279,12 @@ async def ping_proxy(event):
             proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
             continue
         proxy_conf = parse_proxy(p)
-        client = TelegramClient(session, api_id, api_hash, proxy=proxy_conf)
+        client = TelegramClient(
+            os.path.join(SESSIONS_DIR, session),
+            api_id,
+            api_hash,
+            proxy=proxy_conf,
+        )
         try:
             await client.connect()
             await client.get_me()
@@ -407,7 +414,12 @@ async def list_chats(event):
             if not proxy_str:
                 continue
             proxy_conf = parse_proxy(proxy_str)
-            async with TelegramClient(session, api_id, api_hash, proxy=proxy_conf) as client:
+            async with TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=proxy_conf,
+            ) as client:
                 result = await client(
                     GetDialogsRequest(
                         offset_date=None,
@@ -473,7 +485,12 @@ async def parse_command(event):
             if not proxy_str:
                 continue
             proxy_conf = parse_proxy(proxy_str)
-            async with TelegramClient(session, api_id, api_hash, proxy=proxy_conf) as client:
+            async with TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=proxy_conf,
+            ) as client:
                 participants = await client.get_participants(chat)
                 proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
             names = []
@@ -592,7 +609,12 @@ async def test(event):
         with open(MESSAGE_FILE) as f:
             msg = f.read()
         proxy_conf = parse_proxy(proxy_map[session])
-        async with TelegramClient(session, api_id, api_hash, proxy=proxy_conf) as client:
+        async with TelegramClient(
+            os.path.join(SESSIONS_DIR, session),
+            api_id,
+            api_hash,
+            proxy=proxy_conf,
+        ) as client:
             await client.send_message(parts[1], msg)
             proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
     await event.respond('Отправлено')
@@ -635,7 +657,12 @@ async def send_all(event):
                 account_status[session] = 'no proxy'
                 proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
                 continue
-            client = TelegramClient(session, api_id, api_hash, proxy=parse_proxy(proxy_str))
+            client = TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=parse_proxy(proxy_str),
+            )
             try:
                 await client.start()
                 clients[session] = client
@@ -730,7 +757,12 @@ async def send_reply(event):
                 account_status[session] = 'no proxy'
                 proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
                 continue
-            client = TelegramClient(session, api_id, api_hash, proxy=parse_proxy(proxy_str))
+            client = TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=parse_proxy(proxy_str),
+            )
             try:
                 await client.start()
                 clients[session] = client

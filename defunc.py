@@ -20,7 +20,9 @@ from datetime import datetime
 
 
 LISTS_DIR = 'lists'
+SESSIONS_DIR = 'sessions'
 os.makedirs(LISTS_DIR, exist_ok=True)
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 
 def _remove_admins_and_mods(client, index, participants):
@@ -85,7 +87,7 @@ def config():
                 
         options = getoptions()
         sessions = []
-        for file in os.listdir('.'):
+        for file in os.listdir(SESSIONS_DIR):
             if file.endswith('.session'):
                 sessions.append(file)
 
@@ -137,8 +139,11 @@ def config():
                 print(i)
 
             phone = str(input("Введите номер телефона аккаунта: "))
-            TelegramClient(phone, int(options[0].replace('\n', '')),
-                                    options[1].replace('\n', '')).start(phone)
+            TelegramClient(
+                os.path.join(SESSIONS_DIR, phone),
+                int(options[0].replace('\n', '')),
+                options[1].replace('\n', ''),
+            ).start(phone)
 
         elif key == '7':
             os.system('cls||clear')
@@ -151,7 +156,8 @@ def config():
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     session_files = [f for f in zf.namelist() if f.endswith('.session')]
                     for member in session_files:
-                        with zf.open(member) as src, open(os.path.basename(member), 'wb') as dst:
+                        dest = os.path.join(SESSIONS_DIR, os.path.basename(member))
+                        with zf.open(member) as src, open(dest, 'wb') as dst:
                             dst.write(src.read())
                 if session_files:
                     print(f"Добавлено {len(session_files)} сессий.")
