@@ -1,3 +1,4 @@
+from collections import deque
 from telethon import TelegramClient, events
 import os
 import asyncio
@@ -14,6 +15,9 @@ bot = TelegramClient('manager_bot', api_id, api_hash).start(bot_token=bot_token)
 
 async def get_sessions():
     return [f for f in os.listdir('.') if f.endswith('.session')]
+
+# Храним состояние аккаунтов: ok или текст ошибки
+account_status = {}
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
@@ -33,7 +37,11 @@ async def stats(event):
     if os.path.exists('usernames.txt'):
         with open('usernames.txt') as f:
             user_count = len([u for u in f if u.strip()])
-    await event.respond(f'Аккаунтов: {len(sessions)}\nПользователей: {user_count}')
+    lines = []
+    for s in sessions:
+        status = account_status.get(s, 'unknown')
+        lines.append(f'{s}: {status}')
+    await event.respond('Аккаунты:\n' + '\n'.join(lines) + f'\nПользователей: {user_count}')
 
 @bot.on(events.NewMessage(pattern='/set_message'))
 async def set_message(event):
@@ -102,16 +110,50 @@ async def send_all(event):
         return
     with open(MESSAGE_FILE) as f:
         msg = f.read()
+
+    clients = {}
+    account_status.clear()
     for session in sessions:
         client = TelegramClient(session, api_id, api_hash)
-        await client.start()
-        for user in users:
+        try:
+            await client.start()
+            clients[session] = client
+            account_status[session] = 'ok'
+        except Exception as e:
+            account_status[session] = f'error: {type(e).__name__}'
+
+    if not clients:
+        await event.respond('Нет рабочих аккаунтов')
+        return
+
+    queue = deque(clients.items())
+    failed_users = []
+
+    for user in users:
+        delivered = False
+        attempts = 0
+        while queue and attempts < len(queue):
+            session, client = queue[0]
             try:
                 await client.send_message(user, msg)
+                queue.rotate(-1)
+                delivered = True
                 await asyncio.sleep(1)
-            except Exception:
-                continue
+                break
+            except Exception as e:
+                await client.disconnect()
+                account_status[session] = f'error: {type(e).__name__}'
+                queue.popleft()
+                attempts += 1
+        if not delivered:
+            failed_users.append(user)
+
+    for _, client in queue:
         await client.disconnect()
-    await event.respond('Рассылка завершена')
+
+    if failed_users:
+        await event.respond('Не доставлено: ' + ', '.join(failed_users))
+    else:
+        await event.respond('Рассылка завершена')
 
 bot.run_until_disconnected()
