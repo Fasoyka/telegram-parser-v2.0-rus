@@ -5,12 +5,21 @@ with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 '''
 
 from telethon.sync import TelegramClient
+from telethon.tl.types import ChannelParticipantsAdmins
 import os
 import time
+
+
+def _remove_admins_and_mods(client, index, participants):
+    """Remove administrators and moderators from participant list."""
+    admins = client.get_participants(index, filter=ChannelParticipantsAdmins)
+    admin_ids = {admin.id for admin in admins}
+    return [user for user in participants if user.id not in admin_ids]
 
 def parsing(client, index: int, id: bool, name: bool):
     all_participants = []
     all_participants = client.get_participants(index)
+    all_participants = _remove_admins_and_mods(client, index, all_participants)
     if name:
         with open('usernames.txt', 'r+') as f:
             usernames = f.readlines()
