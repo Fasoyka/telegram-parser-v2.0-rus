@@ -102,7 +102,9 @@ async def reply_watcher(client, usernames, msg2, duration=86400):
 account_status = {}
 proxy_status = {}
 available_chats = []
-reply_tasks = []
+# Активные задачи ожидания ответов:
+# session_name -> {'client': TelegramClient, 'usernames': set, 'task': asyncio.Task}
+reply_watchers = {}
 # Глобальная блокировка для исключения одновременного доступа к сессиям
 session_lock = asyncio.Lock()
 
@@ -809,8 +811,11 @@ async def send_reply(event):
     if not users:
         await event.respond('Нет пользователей для рассылки')
         return
-    # Remove completed reply tasks but keep active ones
-    reply_tasks[:] = [t for t in reply_tasks if not t.done()]
+    # Remove completed reply watchers
+    for session, info in list(reply_watchers.items()):
+        task = info.get('task')
+        if task and task.done():
+            reply_watchers.pop(session)
 
     async with session_lock:
         proxy_map = await get_proxy_map()
@@ -832,6 +837,14 @@ async def send_reply(event):
                 account_status[session] = 'no proxy'
                 proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
                 continue
+            if session in reply_watchers:
+                info = reply_watchers[session]
+                client = info['client']
+                pending[session] = info['usernames']
+                clients[session] = client
+                account_status[session] = 'ok'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+                continue
             client = TelegramClient(
                 os.path.join(SESSIONS_DIR, session),
                 api_id,
@@ -841,7 +854,13 @@ async def send_reply(event):
             try:
                 await client.start()
                 clients[session] = client
-                pending[client] = set()
+                pending_set = set()
+                pending[session] = pending_set
+                reply_watchers[session] = {
+                    'client': client,
+                    'usernames': pending_set,
+                    'task': None,
+                }
                 account_status[session] = 'ok'
                 proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
             except Exception as e:
@@ -869,7 +888,7 @@ async def send_reply(event):
                     queue.rotate(-1)
                     delivered = True
                     log_lines.append(f'{user}: delivered')
-                    pending[client].add(username_clean.lower())
+                    pending[session].add(username_clean.lower())
                     await asyncio.sleep(message_delay)
                     break
                 except Exception as e:
@@ -878,19 +897,28 @@ async def send_reply(event):
                     proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
                     queue.popleft()
                     clients.pop(session, None)
+                    pending.pop(session, None)
+                    info = reply_watchers.pop(session, None)
+                    if info and info.get('task'):
+                        info['task'].cancel()
                     attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
             if not delivered:
                 failed_users.append(user)
                 log_lines.append(f'{user}: {error_text or "failed"}')
 
-        for session, client in clients.items():
-            usernames = pending.get(client, set())
-            if usernames:
-                task = asyncio.create_task(reply_watcher(client, usernames, msg2))
-                reply_tasks.append(task)
+        for session, client in list(clients.items()):
+            usernames = pending.get(session, set())
+            watcher = reply_watchers.get(session)
+            if watcher and usernames:
+                if watcher['task'] is None or watcher['task'].done():
+                    watcher['task'] = asyncio.create_task(
+                        reply_watcher(client, watcher['usernames'], msg2)
+                    )
             else:
                 await client.disconnect()
+                if watcher and watcher['task'] is None:
+                    reply_watchers.pop(session, None)
 
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
