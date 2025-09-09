@@ -85,6 +85,9 @@ async def reply_watcher(client, usernames, msg2, duration=86400):
         sender = await event.get_sender()
         username = getattr(sender, 'username', None)
         if username and username.lower() in usernames:
+            await asyncio.sleep(3)
+            async with event.client.action(event.chat_id, 'typing'):
+                await asyncio.sleep(7)
             await event.reply(msg2)
             usernames.remove(username.lower())
 
