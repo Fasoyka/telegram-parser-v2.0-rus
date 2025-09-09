@@ -1,6 +1,6 @@
 from collections import deque
 from functools import wraps
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 from telethon.errors import SessionPasswordNeededError, MessageTooLongError
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
@@ -56,23 +56,24 @@ def notify_errors(func):
 @bot.on(events.NewMessage(pattern='/start'))
 @notify_errors
 async def start(event):
+    keyboard = [
+        [Button.text('/stats'), Button.text('/chats'), Button.text('/lists')],
+        [Button.text('/clear_users'), Button.text('/end'), Button.text('/sessions')],
+        [Button.text('/add_session')],
+    ]
     await event.respond(
-        '/stats - статистика\n'
+        'Выберите команду на клавиатуре ниже.\n'
+        'Для команд с параметрами используйте ввод вручную:\n'
         '/set_message <текст> - текст рассылки\n'
         '/add_user <username> - добавить пользователя\n'
-        '/clear_users - очистить список\n'
-        '/users <имя> - отправить список\n'
-        '/chats - список чатов для парсинга\n'
+        '/users <номер> - отправить список\n'
         '/parse <номер> - спарсить чат\n'
-        '/lists - отправить все списки\n'
         '/del_list <номер> - удалить список\n'
         '/split <номер> <частей> - разделить список\n'
         '/test <username> - тестовая отправка\n'
         '/send <номер> - запустить рассылку\n'
-        '/end - лог рассылки\n'
-        '/sessions - список сессий\n'
-        '/del_session <имя> - удалить сессию\n'
-        '/add_session - отправьте .session файл'
+        '/del_session <имя> - удалить сессию',
+        buttons=keyboard,
     )
 
 @bot.on(events.NewMessage(pattern='/stats'))
@@ -190,21 +191,20 @@ async def clear_users(event):
 @bot.on(events.NewMessage(pattern='/users'))
 @notify_errors
 async def send_users_file(event):
-    parts = event.raw_text.split(maxsplit=1)
+    parts = event.raw_text.split()
     if len(parts) < 2:
-        await event.respond('Использование: /users имя')
+        await event.respond('Использование: /users номер')
         return
-    name = parts[1].strip()
-    if not name.endswith('.txt'):
-        name += '.txt'
-    path = os.path.join(LISTS_DIR, name)
-    if os.path.exists(path):
-        if os.path.getsize(path) > 0:
-            await event.respond(file=path)
-        else:
-            await event.respond('Файл пуст')
+    files = get_user_lists()
+    try:
+        fname = files[int(parts[1])]
+    except (ValueError, IndexError):
+        await event.respond('Неверный номер списка')
+        return
+    if os.path.getsize(fname) > 0:
+        await event.respond(file=fname)
     else:
-        await event.respond('Файл не найден')
+        await event.respond('Файл пуст')
 
 
 @bot.on(events.NewMessage(pattern='/chats'))
