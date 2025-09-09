@@ -7,10 +7,8 @@ with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from telethon.sync import TelegramClient
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
-from telethon.errors.rpcerrorlist import PeerFloodError, UserPrivacyRestrictedError
 from defunc import *
 import time
-import random
 import os
 
 if __name__ == "__main__":
@@ -36,7 +34,7 @@ if __name__ == "__main__":
         os.system('cls||clear')
         selection = str(input("1 - Настройки\n"
                             "2 - Парсинг\n"
-                            "3 - Инвайтинг\n"
+                            "3 - Управление ботом\n"
                             "e - Выход\n"
                             "Ввод: "))
         
@@ -110,41 +108,7 @@ if __name__ == "__main__":
             
 
         elif selection == '3':
-            with open('usernames.txt', 'r') as f:
-                users = list(f)
-
-            print("Выберите юзер-бота для инвайтинга.\n"
-                "(Аккаунт который состоит в группе, в которую производится инвайт)")
-            
-            sessions = []
-            for file in os.listdir('.'):
-                if file.endswith('.session'):
-                    sessions.append(file)
-
-            for i in range(len(sessions)):
-                print(f"{i} -", sessions[i])
-            i = int(input("Ввод: "))
-            
-            client = TelegramClient(sessions[i].replace('\n', ''), api_id, api_hash)
-
-            channelname = input('Введите имя канала для инвайта (без "@")')
-
-            for limit in range(20):
-                try:
-                    inviting(client, channelname, users[limit].replace('\n', ''))
-                    print(users[limit].replace('\n', ''))
-                    time.sleep(random.randrange(15, 40))
-
-                except UserPrivacyRestrictedError:
-                    print('Пользователь ' + users[limit].replace('\n', '') + ' запретил его инвайтить. Пропускаем :(')
-
-                except PeerFloodError:
-                    print('Телеграмм заспамлен.')
-                    break
-
-                except Exception as error:
-                    print(error)
-                    break
+            os.system('python bot_manager.py')
 
         elif selection == 'e':
             break
