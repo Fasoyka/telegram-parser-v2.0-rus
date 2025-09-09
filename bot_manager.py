@@ -606,7 +606,7 @@ async def send_all(event):
         else:
             await event.respond('Рассылка завершена')
 
-@bot.on(events.NewMessage(pattern='/end|Завершить'))
+@bot.on(events.NewMessage(pattern='/end|Логи отправки'))
 @notify_errors
 async def send_log(event):
     if os.path.exists('send_log.txt'):
