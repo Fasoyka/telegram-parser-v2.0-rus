@@ -22,6 +22,25 @@ bot_token = options[4].strip()
 bot = TelegramClient('manager_bot', api_id, api_hash).start(bot_token=bot_token)
 
 PROXY_FILE = 'proxies.txt'
+DELAY_FILE = 'delay.txt'
+
+
+def load_delay():
+    if os.path.exists(DELAY_FILE):
+        try:
+            with open(DELAY_FILE) as f:
+                return float(f.read().strip())
+        except ValueError:
+            pass
+    return 5.0
+
+
+def save_delay(value):
+    with open(DELAY_FILE, 'w') as f:
+        f.write(str(value))
+
+
+message_delay = load_delay()
 
 
 async def get_sessions():
@@ -101,6 +120,7 @@ async def start(event):
         'Выберите команду на клавиатуре ниже.\n'
         'Для команд с параметрами используйте ввод вручную:\n'
         '/set_message <текст> - текст рассылки\n'
+        '/set_delay <сек> - задержка между сообщениями\n'
         '/add_user <username> - добавить пользователя\n'
         '/users <номер> - отправить список\n'
         '/parse <номер> - спарсить чат\n'
@@ -268,6 +288,24 @@ async def set_message(event):
     with open(MESSAGE_FILE, 'w') as f:
         f.write(parts[1])
     await event.respond('Текст сохранён')
+
+
+@bot.on(events.NewMessage(pattern='/set_delay'))
+@notify_errors
+async def set_delay_cmd(event):
+    parts = event.raw_text.split()
+    if len(parts) < 2:
+        await event.respond('Использование: /set_delay секунды')
+        return
+    try:
+        value = float(parts[1])
+    except ValueError:
+        await event.respond('Введите число секунд')
+        return
+    global message_delay
+    message_delay = max(0, value)
+    save_delay(message_delay)
+    await event.respond(f'Задержка установлена: {message_delay} c')
 
 
 @bot.on(events.NewMessage(pattern='/add_user'))
@@ -582,7 +620,7 @@ async def send_all(event):
                     queue.rotate(-1)
                     delivered = True
                     log_lines.append(f'{user}: delivered')
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(message_delay)
                     break
                 except Exception as e:
                     await client.disconnect()
