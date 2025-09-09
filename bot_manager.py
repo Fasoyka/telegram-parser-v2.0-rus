@@ -17,7 +17,11 @@ bot_token = options[4].strip()
 bot = TelegramClient('manager_bot', api_id, api_hash).start(bot_token=bot_token)
 
 async def get_sessions():
-    return [f for f in os.listdir('.') if f.endswith('.session')]
+    return [
+        f
+        for f in os.listdir('.')
+        if f.endswith('.session') and f != 'manager_bot.session'
+    ]
 
 # Храним состояние аккаунтов: ok или текст ошибки
 account_status = {}
