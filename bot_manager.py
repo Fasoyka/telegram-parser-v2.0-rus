@@ -8,6 +8,7 @@ import os
 import asyncio
 import re
 from datetime import datetime
+import socks
 from defunc import getoptions
 
 LISTS_DIR = 'lists'
@@ -22,12 +23,28 @@ bot_token = options[4].strip()
 
 bot = TelegramClient('manager_bot', api_id, api_hash).start(bot_token=bot_token)
 
+PROXY_FILE = 'proxies.txt'
+
+
 async def get_sessions():
-    return [
+    return sorted(
         f
         for f in os.listdir('.')
         if f.endswith('.session') and f != 'manager_bot.session'
-    ]
+    )
+
+
+def load_proxies():
+    if not os.path.exists(PROXY_FILE):
+        return []
+    with open(PROXY_FILE) as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def save_proxies(proxies):
+    with open(PROXY_FILE, 'w') as f:
+        if proxies:
+            f.write('\n'.join(proxies) + '\n')
 
 
 def get_user_lists():
@@ -39,9 +56,28 @@ def get_user_lists():
 
 # Храним состояние аккаунтов: ok или текст ошибки
 account_status = {}
+proxy_status = {}
 available_chats = []
 # Глобальная блокировка для исключения одновременного доступа к сессиям
 session_lock = asyncio.Lock()
+
+
+def parse_proxy(proxy_str):
+    parts = proxy_str.split(':')
+    host = parts[0]
+    port = int(parts[1])
+    user = parts[2] if len(parts) > 2 else None
+    password = parts[3] if len(parts) > 3 else None
+    return (socks.SOCKS5, host, port, True, user, password)
+
+
+async def get_proxy_map():
+    sessions = await get_sessions()
+    proxies = load_proxies()
+    return {
+        session: (proxies[i] if i < len(proxies) else None)
+        for i, session in enumerate(sessions)
+    }
 
 
 def notify_errors(func):
@@ -60,7 +96,8 @@ async def start(event):
         [Button.text('Статистика', resize=True), Button.text('Чаты')],
         [Button.text('Списки'), Button.text('Очистить пользователей')],
         [Button.text('Завершить'), Button.text('Сессии')],
-        [Button.text('Добавить сессию')],
+        [Button.text('Добавить сессию'), Button.text('Добавить прокси')],
+        [Button.text('Пинг прокси')],
     ]
     await event.respond(
         'Выберите команду на клавиатуре ниже.\n'
@@ -73,7 +110,9 @@ async def start(event):
         '/split <номер> <частей> - разделить список\n'
         '/test <username> - тестовая отправка\n'
         '/send <номер> - запустить рассылку\n'
-        '/del_session <имя> - удалить сессию',
+        '/del_session <имя> - удалить сессию\n'
+        '/add_proxy <прокси> - добавить прокси (несколько через перенос строки)\n'
+        '/ping_proxy - проверить прокси',
         buttons=keyboard,
     )
 
@@ -95,11 +134,27 @@ async def stats(event):
 @bot.on(events.NewMessage(pattern='/sessions|Сессии'))
 @notify_errors
 async def list_sessions_cmd(event):
+    proxy_map = await get_proxy_map()
     sessions = await get_sessions()
-    if sessions:
-        await event.respond('Сессии:\n' + '\n'.join(sessions))
-    else:
+    if not sessions:
         await event.respond('Нет сессий')
+        return
+    lines = []
+    now = datetime.utcnow()
+    for s in sessions:
+        p = proxy_map.get(s)
+        if not p:
+            emoji = '🔴'
+            proxy_text = 'нет'
+        else:
+            info = proxy_status.get(s)
+            if not info or (now - info['time']).total_seconds() > 300:
+                emoji = '🟡'
+            else:
+                emoji = '🟢' if info['alive'] else '🔴'
+            proxy_text = p
+        lines.append(f"{emoji} {s} - {proxy_text}")
+    await event.respond('Сессии:\n' + '\n'.join(lines))
 
 
 @bot.on(events.NewMessage(pattern='/del_session'))
@@ -158,6 +213,48 @@ async def add_session(event):
         finally:
             await client.disconnect()
 
+
+@bot.on(events.NewMessage(pattern='/add_proxy|Добавить прокси'))
+@notify_errors
+async def add_proxy(event):
+    lines = event.raw_text.splitlines()[1:]
+    if not lines:
+        await event.respond('Отправьте /add_proxy и список прокси в следующих строках')
+        return
+    proxies = load_proxies()
+    count = 0
+    for line in lines:
+        line = line.strip()
+        if line:
+            proxies.append(line)
+            count += 1
+    save_proxies(proxies)
+    await event.respond(f'Добавлено прокси: {count}')
+
+
+@bot.on(events.NewMessage(pattern='/ping_proxy|Пинг прокси'))
+@notify_errors
+async def ping_proxy(event):
+    proxy_map = await get_proxy_map()
+    if not proxy_map:
+        await event.respond('Нет сессий')
+        return
+    for session, p in proxy_map.items():
+        if not p:
+            proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+            continue
+        proxy_conf = parse_proxy(p)
+        client = TelegramClient(session, api_id, api_hash, proxy=proxy_conf)
+        try:
+            await client.connect()
+            await client.get_me()
+            proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+        except Exception:
+            proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+        finally:
+            await client.disconnect()
+    await event.respond('Проверка прокси завершена')
+
 @bot.on(events.NewMessage(pattern='/set_message'))
 @notify_errors
 async def set_message(event):
@@ -212,6 +309,7 @@ async def send_users_file(event):
 @notify_errors
 async def list_chats(event):
     async with session_lock:
+        proxy_map = await get_proxy_map()
         sessions = await get_sessions()
         if not sessions:
             await event.respond('Нет аккаунтов')
@@ -220,7 +318,11 @@ async def list_chats(event):
         chat_map = []
         seen_ids = set()
         for session in sessions:
-            async with TelegramClient(session, api_id, api_hash) as client:
+            proxy_str = proxy_map.get(session)
+            if not proxy_str:
+                continue
+            proxy_conf = parse_proxy(proxy_str)
+            async with TelegramClient(session, api_id, api_hash, proxy=proxy_conf) as client:
                 result = await client(
                     GetDialogsRequest(
                         offset_date=None,
@@ -230,6 +332,7 @@ async def list_chats(event):
                         hash=0,
                     )
                 )
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
                 for chat in result.chats:
                     try:
                         if chat.megagroup and chat.id not in seen_ids:
@@ -278,10 +381,16 @@ async def parse_command(event):
         opts = getoptions()
         parse_ids = opts[2].strip() == 'True'
         parse_names = opts[3].strip() == 'True'
+        proxy_map = await get_proxy_map()
         created_files = []
         for session, chat in targets:
-            async with TelegramClient(session, api_id, api_hash) as client:
+            proxy_str = proxy_map.get(session)
+            if not proxy_str:
+                continue
+            proxy_conf = parse_proxy(proxy_str)
+            async with TelegramClient(session, api_id, api_hash, proxy=proxy_conf) as client:
                 participants = await client.get_participants(chat)
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
             names = []
             ids = []
             for user in participants:
@@ -385,14 +494,22 @@ async def test(event):
         await event.respond('Сначала задайте текст через /set_message')
         return
     async with session_lock:
+        proxy_map = await get_proxy_map()
         sessions = await get_sessions()
-        if not sessions:
-            await event.respond('Нет аккаунтов')
+        session = None
+        for s in sessions:
+            if proxy_map.get(s):
+                session = s
+                break
+        if not session:
+            await event.respond('Нет аккаунтов с прокси')
             return
         with open(MESSAGE_FILE) as f:
             msg = f.read()
-        async with TelegramClient(sessions[0], api_id, api_hash) as client:
+        proxy_conf = parse_proxy(proxy_map[session])
+        async with TelegramClient(session, api_id, api_hash, proxy=proxy_conf) as client:
             await client.send_message(parts[1], msg)
+            proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
     await event.respond('Отправлено')
 
 @bot.on(events.NewMessage(pattern='/send'))
@@ -417,6 +534,7 @@ async def send_all(event):
         await event.respond('Нет пользователей для рассылки')
         return
     async with session_lock:
+        proxy_map = await get_proxy_map()
         sessions = await get_sessions()
         if not sessions:
             await event.respond('Нет аккаунтов')
@@ -427,13 +545,20 @@ async def send_all(event):
         clients = {}
         account_status.clear()
         for session in sessions:
-            client = TelegramClient(session, api_id, api_hash)
+            proxy_str = proxy_map.get(session)
+            if not proxy_str:
+                account_status[session] = 'no proxy'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                continue
+            client = TelegramClient(session, api_id, api_hash, proxy=parse_proxy(proxy_str))
             try:
                 await client.start()
                 clients[session] = client
                 account_status[session] = 'ok'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
             except Exception as e:
                 account_status[session] = f'error: {type(e).__name__}'
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
 
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
@@ -459,6 +584,7 @@ async def send_all(event):
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
+                    proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
                     queue.popleft()
                     attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
