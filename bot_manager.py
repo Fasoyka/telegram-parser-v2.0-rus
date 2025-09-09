@@ -132,7 +132,11 @@ async def start(event):
         [Button.text('Статистика', resize=True), Button.text('Чаты')],
         [Button.text('Списки'), Button.text('Очистить пользователей')],
         [Button.text('Логи отправки'), Button.text('Сессии')],
-        [Button.text('Добавить сессию'), Button.text('Добавить прокси')],
+        [
+            Button.text('Добавить сессию'),
+            Button.text('Добавить архив'),
+            Button.text('Добавить прокси'),
+        ],
         [Button.text('Пинг прокси'), Button.text('Скачать прокси')],
     ]
     await event.respond(
@@ -151,7 +155,8 @@ async def start(event):
         '/send <номер> - запустить рассылку\n'
         '/send_reply <номер> - рассылка с ответом\n'
         '/del_session <имя> - удалить сессию\n'
-        '/add_session - добавить .session или .zip архив с сессиями\n'
+        '/add_session - добавить .session\n'
+        '/add_zip - добавить .zip архив с сессиями\n'
         '/add_proxy <прокси> - заменить список прокси (несколько через перенос строки)\n'
         '/ping_proxy - проверить прокси\n'
         '/get_proxy - скачать список прокси',
@@ -238,22 +243,9 @@ async def add_session(event):
             await event.respond('Сессия добавлена')
             return
 
-        # Архив с множеством .session файлов
+        # Предложить использовать другую команду для архива
         if filename.endswith('.zip'):
-            data = BytesIO()
-            await event.message.download_media(file=data)
-            data.seek(0)
-            count = 0
-            async with session_lock:
-                with zipfile.ZipFile(data) as zf:
-                    for name in zf.namelist():
-                        if name.endswith('.session'):
-                            dest = os.path.join(SESSIONS_DIR, os.path.basename(name))
-                            with zf.open(name) as src, open(dest, 'wb') as dst:
-                                dst.write(src.read())
-                            account_status[os.path.basename(name)] = 'ok'
-                            count += 1
-            await event.respond(f'Импортировано сессий: {count}')
+            await event.respond('Используйте команду /add_zip для импорта архива')
             return
 
     # Иначе запускаем интерактивное добавление через телефон
@@ -279,6 +271,33 @@ async def add_session(event):
             await conv.send_message(f'Ошибка: {e}')
         finally:
             await client.disconnect()
+
+
+@bot.on(events.NewMessage(pattern='/add_zip|Добавить архив'))
+@notify_errors
+async def add_zip(event):
+    if not (event.message.file and event.message.file.name.endswith('.zip')):
+        await event.respond('Отправьте .zip архив с сессиями')
+        return
+
+    data = BytesIO()
+    await event.message.download_media(file=data)
+    data.seek(0)
+    count = 0
+    async with session_lock:
+        with zipfile.ZipFile(data) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                if info.filename.lower().endswith('.session'):
+                    dest = os.path.join(
+                        SESSIONS_DIR, os.path.basename(info.filename)
+                    )
+                    with zf.open(info) as src, open(dest, 'wb') as dst:
+                        dst.write(src.read())
+                    account_status[os.path.basename(info.filename)] = 'ok'
+                    count += 1
+    await event.respond(f'Импортировано сессий: {count}')
 
 
 @bot.on(events.NewMessage(pattern='/add_proxy|Добавить прокси'))
