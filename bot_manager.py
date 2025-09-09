@@ -286,16 +286,12 @@ async def add_zip(event):
     count = 0
     async with session_lock:
         with zipfile.ZipFile(data) as zf:
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                if info.filename.lower().endswith('.session'):
-                    dest = os.path.join(
-                        SESSIONS_DIR, os.path.basename(info.filename)
-                    )
-                    with zf.open(info) as src, open(dest, 'wb') as dst:
+            for name in zf.namelist():
+                if name.endswith('.session'):
+                    dest = os.path.join(SESSIONS_DIR, os.path.basename(name))
+                    with zf.open(name) as src, open(dest, 'wb') as dst:
                         dst.write(src.read())
-                    account_status[os.path.basename(info.filename)] = 'ok'
+                    account_status[os.path.basename(name)] = 'ok'
                     count += 1
     await event.respond(f'Импортировано сессий: {count}')
 
