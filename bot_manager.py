@@ -58,12 +58,20 @@ async def get_sessions():
         try:
             with sqlite3.connect(path) as conn:
                 cur = conn.cursor()
-                cur.execute("PRAGMA table_info(sessions)")
-                cols = [row[1] for row in cur.fetchall()]
-                if 'version' not in cols:
-                    cur.execute(
-                        "ALTER TABLE sessions ADD COLUMN version INTEGER DEFAULT 0",
-                    )
+                # Ensure the auxiliary version table exists with correct column
+                cur.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='version'"
+                )
+                if not cur.fetchone():
+                    cur.execute("CREATE TABLE version (version INTEGER)")
+                    cur.execute("INSERT INTO version VALUES (0)")
+                else:
+                    cur.execute("PRAGMA table_info(version)")
+                    cols = [row[1] for row in cur.fetchall()]
+                    if 'version' not in cols:
+                        cur.execute("DROP TABLE version")
+                        cur.execute("CREATE TABLE version (version INTEGER)")
+                        cur.execute("INSERT INTO version VALUES (0)")
                 conn.commit()
             sessions.append(name)
         except sqlite3.Error:
