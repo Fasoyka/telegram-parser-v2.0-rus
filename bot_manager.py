@@ -206,7 +206,8 @@ def notify_errors(func):
         try:
             return await func(event, *args, **kwargs)
         except Exception as e:
-            await event.respond(f'Ошибка: {type(e).__name__}: {e}')
+            print(f'Ошибка: {type(e).__name__}: {e}')
+            await event.respond('Произошла ошибка. Подробности в консоли.')
     return wrapper
 
 @bot.on(events.NewMessage(pattern='/start'))
@@ -352,7 +353,8 @@ async def add_session(event):
             account_status[f'{session_name}.session'] = 'ok'
             await conv.send_message('Сессия добавлена')
         except Exception as e:
-            await conv.send_message(f'Ошибка: {e}')
+            print(f'Ошибка: {e}')
+            await conv.send_message('Произошла ошибка. Подробности в консоли.')
         finally:
             await client.disconnect()
 
