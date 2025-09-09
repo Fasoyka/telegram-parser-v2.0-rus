@@ -90,7 +90,10 @@ if __name__ == "__main__":
             g_index = str(input())
 
             if g_index == 'clear':
-                clear_user_lists()
+                for filename in os.listdir(LISTS_DIR):
+                    file_path = os.path.join(LISTS_DIR, filename)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
 
             elif int(g_index) < i + 1:
                 target_group = groups[int(g_index)]
