@@ -49,12 +49,11 @@ message_delay = load_delay()
 
 
 async def get_sessions():
-    sessions = sorted(
-        f
-        for f in os.listdir(SESSIONS_DIR)
-        if f.endswith('.session')
-    )
-    for name in sessions:
+    """Return list of valid session files ensuring required schema."""
+    sessions = []
+    for name in sorted(os.listdir(SESSIONS_DIR)):
+        if not name.endswith('.session'):
+            continue
         path = os.path.join(SESSIONS_DIR, name)
         try:
             with sqlite3.connect(path) as conn:
@@ -63,13 +62,13 @@ async def get_sessions():
                 cols = [row[1] for row in cur.fetchall()]
                 if 'version' not in cols:
                     cur.execute(
-                        "ALTER TABLE sessions ADD COLUMN version INTEGER DEFAULT 0"
+                        "ALTER TABLE sessions ADD COLUMN version INTEGER DEFAULT 0",
                     )
                 conn.commit()
+            sessions.append(name)
         except sqlite3.Error:
-            pass
+            continue
     return sessions
-
 
 def load_proxies():
     if not os.path.exists(PROXY_FILE):
@@ -347,30 +346,31 @@ async def add_proxy(event):
 @bot.on(events.NewMessage(pattern='/ping_proxy|Пинг прокси'))
 @notify_errors
 async def ping_proxy(event):
-    proxy_map = await get_proxy_map()
-    if not proxy_map:
-        await event.respond('Нет сессий')
-        return
-    for session, p in proxy_map.items():
-        if not p:
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
-            continue
-        proxy_conf = parse_proxy(p)
-        client = TelegramClient(
-            os.path.join(SESSIONS_DIR, session),
-            api_id,
-            api_hash,
-            proxy=proxy_conf,
-        )
-        try:
-            await client.connect()
-            await client.get_me()
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
-        except Exception:
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
-        finally:
-            await client.disconnect()
-    await event.respond('Проверка прокси завершена')
+    async with session_lock:
+        proxy_map = await get_proxy_map()
+        if not proxy_map:
+            await event.respond('Нет сессий')
+            return
+        for session, p in proxy_map.items():
+            if not p:
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                continue
+            proxy_conf = parse_proxy(p)
+            client = TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=proxy_conf,
+            )
+            try:
+                await client.connect()
+                await client.get_me()
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+            except Exception:
+                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+            finally:
+                await client.disconnect()
+        await event.respond('Проверка прокси завершена')
 
 
 @bot.on(events.NewMessage(pattern='/get_proxy|Скачать прокси'))
@@ -479,7 +479,7 @@ async def send_users_file(event):
 async def list_chats(event):
     async with session_lock:
         proxy_map = await get_proxy_map()
-        sessions = await get_sessions()
+        sessions = list(proxy_map.keys())
         if not sessions:
             await event.respond('Нет аккаунтов')
             return
