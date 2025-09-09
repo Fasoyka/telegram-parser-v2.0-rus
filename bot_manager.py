@@ -9,10 +9,8 @@ import asyncio
 import re
 from datetime import datetime
 import socks
-from defunc import getoptions
+from defunc import getoptions, clear_user_lists, LISTS_DIR
 
-LISTS_DIR = 'lists'
-os.makedirs(LISTS_DIR, exist_ok=True)
 USER_FILE = os.path.join(LISTS_DIR, 'usernames.txt')
 MESSAGE_FILE = 'message.txt'
 
@@ -287,8 +285,8 @@ async def add_user(event):
 @bot.on(events.NewMessage(pattern='/clear_users|Очистить пользователей'))
 @notify_errors
 async def clear_users(event):
-    open(USER_FILE, 'w').close()
-    await event.respond('Список пользователей очищен')
+    clear_user_lists()
+    await event.respond('Все списки пользователей очищены')
 
 
 @bot.on(events.NewMessage(pattern='/users'))

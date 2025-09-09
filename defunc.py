@@ -162,3 +162,11 @@ def getoptions():
     with open('options.txt', 'r') as f:
         options = f.readlines()
     return options
+
+
+def clear_user_lists():
+    """Remove all files inside the lists directory."""
+    for filename in os.listdir(LISTS_DIR):
+        file_path = os.path.join(LISTS_DIR, filename)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
