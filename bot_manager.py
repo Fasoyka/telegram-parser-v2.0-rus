@@ -7,7 +7,7 @@ from telethon.tl.types import InputPeerEmpty
 import os
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import zipfile
 from io import BytesIO
 import socks
@@ -77,7 +77,7 @@ def get_user_lists():
 
 
 async def reply_watcher(client, usernames, msg2, duration=86400):
-    start_time = datetime.now(timezone.utc)
+    start_time = datetime.now(UTC)
 
     async def handler(event):
         if event.message.out or event.message.date <= start_time:
@@ -198,7 +198,7 @@ async def list_sessions_cmd(event):
         await event.respond('Нет сессий')
         return
     lines = []
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     for s in sessions:
         p = proxy_map.get(s)
         if not p:
@@ -342,7 +342,7 @@ async def ping_proxy(event):
         return
     for session, p in proxy_map.items():
         if not p:
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+            proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
             continue
         proxy_conf = parse_proxy(p)
         client = TelegramClient(
@@ -354,9 +354,9 @@ async def ping_proxy(event):
         try:
             await client.connect()
             await client.get_me()
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+            proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
         except Exception:
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+            proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
         finally:
             await client.disconnect()
     await event.respond('Проверка прокси завершена')
@@ -495,7 +495,7 @@ async def list_chats(event):
                         hash=0,
                     )
                 )
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
                 for chat in result.chats:
                     try:
                         if chat.megagroup and chat.id not in seen_ids:
@@ -558,7 +558,7 @@ async def parse_command(event):
                 proxy=proxy_conf,
             ) as client:
                 participants = await client.get_participants(chat)
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
             names = []
             ids = []
             for user in participants:
@@ -682,7 +682,7 @@ async def test(event):
             proxy=proxy_conf,
         ) as client:
             await client.send_message(parts[1], msg)
-            proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+            proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
     await event.respond('Отправлено')
 
 @bot.on(events.NewMessage(pattern=r'/send(?:\s|$)'))
@@ -721,7 +721,7 @@ async def send_all(event):
             proxy_str = proxy_map.get(session)
             if not proxy_str:
                 account_status[session] = 'no proxy'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                 continue
             client = TelegramClient(
                 os.path.join(SESSIONS_DIR, session),
@@ -733,10 +733,10 @@ async def send_all(event):
                 await client.start()
                 clients[session] = client
                 account_status[session] = 'ok'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
             except Exception as e:
                 account_status[session] = f'error: {type(e).__name__}'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
 
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
@@ -762,7 +762,7 @@ async def send_all(event):
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
-                    proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                     queue.popleft()
                     attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
@@ -835,7 +835,7 @@ async def send_reply(event):
             proxy_str = proxy_map.get(session)
             if not proxy_str:
                 account_status[session] = 'no proxy'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                 continue
             if session in reply_watchers:
                 info = reply_watchers[session]
@@ -843,7 +843,7 @@ async def send_reply(event):
                 pending[session] = info['usernames']
                 clients[session] = client
                 account_status[session] = 'ok'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
                 continue
             client = TelegramClient(
                 os.path.join(SESSIONS_DIR, session),
@@ -862,10 +862,10 @@ async def send_reply(event):
                     'task': None,
                 }
                 account_status[session] = 'ok'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': True}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
             except Exception as e:
                 account_status[session] = f'error: {type(e).__name__}'
-                proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
 
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
@@ -894,7 +894,7 @@ async def send_reply(event):
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
-                    proxy_status[session] = {'time': datetime.utcnow(), 'alive': False}
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                     queue.popleft()
                     clients.pop(session, None)
                     pending.pop(session, None)
