@@ -4,6 +4,7 @@ from telethon import TelegramClient, events, Button
 from telethon.errors import SessionPasswordNeededError, MessageTooLongError
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
+from telethon.extensions import markdown
 import os
 import asyncio
 import re
@@ -430,7 +431,8 @@ async def get_proxy_list(event):
 @bot.on(events.NewMessage(pattern='/set_message'))
 @notify_errors
 async def set_message(event):
-    parts = event.raw_text.split(' ', 1)
+    full = markdown.unparse(event.raw_text, event.message.entities or [])
+    parts = full.split(' ', 1)
     if len(parts) < 2:
         await event.respond('Использование: /set_message текст')
         return
@@ -442,7 +444,8 @@ async def set_message(event):
 @bot.on(events.NewMessage(pattern='/set_message1'))
 @notify_errors
 async def set_message1(event):
-    parts = event.raw_text.split(' ', 1)
+    full = markdown.unparse(event.raw_text, event.message.entities or [])
+    parts = full.split(' ', 1)
     if len(parts) < 2:
         await event.respond('Использование: /set_message1 текст')
         return
@@ -454,7 +457,8 @@ async def set_message1(event):
 @bot.on(events.NewMessage(pattern='/set_message2'))
 @notify_errors
 async def set_message2(event):
-    parts = event.raw_text.split(' ', 1)
+    full = markdown.unparse(event.raw_text, event.message.entities or [])
+    parts = full.split(' ', 1)
     if len(parts) < 2:
         await event.respond('Использование: /set_message2 текст')
         return
