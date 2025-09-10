@@ -479,38 +479,53 @@ async def list_chats(event):
             return
         groups = []
         chat_map = []
+        broken_sessions = []
         seen_ids = set()
         total = len(sessions)
         for idx, session in enumerate(sessions, 1):
             await status.edit(f'Обработка аккаунта {idx}/{total}')
             proxy_str = proxy_map.get(session)
             if not proxy_str:
+                broken_sessions.append(f"{session}: no proxy")
+                account_status[session] = 'no proxy'
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                 continue
             proxy_conf = parse_proxy(proxy_str)
-            async with TelegramClient(
-                os.path.join(SESSIONS_DIR, session),
-                api_id,
-                api_hash,
-                proxy=proxy_conf,
-            ) as client:
-                result = await client(
-                    GetDialogsRequest(
-                        offset_date=None,
-                        offset_id=0,
-                        offset_peer=InputPeerEmpty(),
-                        limit=200,
-                        hash=0,
+            try:
+                async with TelegramClient(
+                    os.path.join(SESSIONS_DIR, session),
+                    api_id,
+                    api_hash,
+                    proxy=proxy_conf,
+                ) as client:
+                    result = await client(
+                        GetDialogsRequest(
+                            offset_date=None,
+                            offset_id=0,
+                            offset_peer=InputPeerEmpty(),
+                            limit=200,
+                            hash=0,
+                        )
                     )
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                    account_status[session] = 'ok'
+                    for chat in result.chats:
+                        try:
+                            if chat.megagroup and chat.id not in seen_ids:
+                                seen_ids.add(chat.id)
+                                groups.append(f"{chat.title} ({session})")
+                                chat_map.append((session, chat))
+                        except AttributeError:
+                            continue
+            except Exception as e:
+                broken_sessions.append(
+                    f"{session}: {type(e).__name__}: {e}"
                 )
-                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-                for chat in result.chats:
-                    try:
-                        if chat.megagroup and chat.id not in seen_ids:
-                            seen_ids.add(chat.id)
-                            groups.append(f"{chat.title} ({session})")
-                            chat_map.append((session, chat))
-                    except AttributeError:
-                        continue
+                account_status[session] = f'error: {type(e).__name__}'
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                continue
+        if broken_sessions:
+            await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
         if not chat_map:
             await status.edit('Нет доступных групп')
             return
@@ -728,11 +743,13 @@ async def send_all(event):
 
         clients = {}
         account_status.clear()
+        broken_sessions = []
         for session in sessions:
             proxy_str = proxy_map.get(session)
             if not proxy_str:
                 account_status[session] = 'no proxy'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                broken_sessions.append(f"{session}: no proxy")
                 continue
             client = TelegramClient(
                 os.path.join(SESSIONS_DIR, session),
@@ -748,7 +765,12 @@ async def send_all(event):
             except Exception as e:
                 account_status[session] = f'error: {type(e).__name__}'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                broken_sessions.append(
+                    f"{session}: {type(e).__name__}: {e}"
+                )
 
+        if broken_sessions:
+            await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
             return
@@ -756,6 +778,7 @@ async def send_all(event):
         queue = deque(clients.items())
         failed_users = []
         log_lines = []
+        failed_sessions = set()
 
         for idx, user in enumerate(users, 1):
             delivered = False
@@ -777,6 +800,9 @@ async def send_all(event):
                     queue.popleft()
                     attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
+                    failed_sessions.add(
+                        f"{session}: {type(e).__name__}: {e}"
+                    )
             if not delivered:
                 failed_users.append(user)
                 log_lines.append(f'{user}: {error_text or "failed"}')
@@ -784,6 +810,9 @@ async def send_all(event):
 
         for _, client in queue:
             await client.disconnect()
+
+        if failed_sessions:
+            await event.respond('Сломанные сессии:\n' + '\n'.join(failed_sessions))
 
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
@@ -844,11 +873,13 @@ async def send_reply(event):
         clients = {}
         pending = {}
         account_status.clear()
+        broken_sessions = []
         for session in sessions:
             proxy_str = proxy_map.get(session)
             if not proxy_str:
                 account_status[session] = 'no proxy'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                broken_sessions.append(f"{session}: no proxy")
                 continue
             if session in reply_watchers:
                 info = reply_watchers[session]
@@ -881,7 +912,12 @@ async def send_reply(event):
             except Exception as e:
                 account_status[session] = f'error: {type(e).__name__}'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                broken_sessions.append(
+                    f"{session}: {type(e).__name__}: {e}"
+                )
 
+        if broken_sessions:
+            await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
             return
@@ -889,6 +925,7 @@ async def send_reply(event):
         queue = deque(clients.items())
         failed_users = []
         log_lines = []
+        failed_sessions = set()
 
         for idx, user in enumerate(users, 1):
             delivered = False
@@ -918,6 +955,9 @@ async def send_reply(event):
                         info['task'].cancel()
                     attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
+                    failed_sessions.add(
+                        f"{session}: {type(e).__name__}: {e}"
+                    )
             if not delivered:
                 failed_users.append(user)
                 log_lines.append(f'{user}: {error_text or "failed"}')
@@ -930,6 +970,9 @@ async def send_reply(event):
                 if watcher and watcher.get('task'):
                     watcher['task'].cancel()
                 await client.disconnect()
+
+        if failed_sessions:
+            await event.respond('Сломанные сессии:\n' + '\n'.join(failed_sessions))
 
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
