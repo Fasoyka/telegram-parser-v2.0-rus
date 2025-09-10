@@ -872,7 +872,9 @@ async def send_reply(event):
                 reply_watchers[session] = {
                     'client': client,
                     'usernames': pending_set,
-                    'task': None,
+                    'task': asyncio.create_task(
+                        reply_watcher(client, pending_set, msg2)
+                    ),
                 }
                 account_status[session] = 'ok'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
@@ -923,16 +925,11 @@ async def send_reply(event):
 
         for session, client in list(clients.items()):
             usernames = pending.get(session, set())
-            watcher = reply_watchers.get(session)
-            if watcher and usernames:
-                if watcher['task'] is None or watcher['task'].done():
-                    watcher['task'] = asyncio.create_task(
-                        reply_watcher(client, watcher['usernames'], msg2)
-                    )
-            else:
+            if not usernames:
+                watcher = reply_watchers.pop(session, None)
+                if watcher and watcher.get('task'):
+                    watcher['task'].cancel()
                 await client.disconnect()
-                if watcher and watcher['task'] is None:
-                    reply_watchers.pop(session, None)
 
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
