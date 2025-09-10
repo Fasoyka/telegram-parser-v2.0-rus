@@ -102,6 +102,8 @@ async def reply_watcher(client, usernames, msg2, duration=86400):
 account_status = {}
 proxy_status = {}
 available_chats = []
+# Сессии, требующие повторной авторизации
+pending_reauth = set()
 # Активные задачи ожидания ответов:
 # session_name -> {'client': TelegramClient, 'usernames': set, 'task': asyncio.Task}
 reply_watchers = {}
@@ -166,6 +168,7 @@ async def start(event):
         '/send <номер> - запустить рассылку\n'
         '/send_reply <номер> - рассылка с ответом\n'
         '/del_session <имя> - удалить сессию\n'
+        '/reauth <имя> - повторная авторизация сессии\n'
         '/add_session - добавить .session\n'
         '/add_zip - добавить .zip архив с сессиями\n'
         '/add_proxy <прокси> - заменить список прокси (несколько через перенос строки)\n'
@@ -284,6 +287,49 @@ async def add_session(event):
             await client.disconnect()
 
 
+@bot.on(events.NewMessage(pattern='/reauth'))
+@notify_errors
+async def reauth_session(event):
+    parts = event.raw_text.split(maxsplit=1)
+    if len(parts) < 2:
+        if pending_reauth:
+            await event.respond(
+                'Сессии для повторной авторизации:\n' + '\n'.join(sorted(pending_reauth))
+            )
+        else:
+            await event.respond('Нет сессий для повторной авторизации')
+        return
+    session = parts[1].strip()
+    if not session.endswith('.session'):
+        session += '.session'
+    path = os.path.join(SESSIONS_DIR, session)
+    if not os.path.exists(path):
+        await event.respond('Сессия не найдена')
+        return
+    async with bot.conversation(event.chat_id, timeout=120) as conv:
+        await conv.send_message('Введите номер телефона в формате +79990000000')
+        phone = (await conv.get_response()).raw_text.strip()
+        client = TelegramClient(path, api_id, api_hash)
+        await client.connect()
+        try:
+            await client.send_code_request(phone)
+            await conv.send_message('Введите код из Telegram:')
+            code = (await conv.get_response()).raw_text.strip()
+            try:
+                await client.sign_in(phone, code)
+            except SessionPasswordNeededError:
+                await conv.send_message('Введите пароль:')
+                password = (await conv.get_response()).raw_text.strip()
+                await client.sign_in(password=password)
+            account_status[session] = 'ok'
+            pending_reauth.discard(session)
+            await conv.send_message('Сессия авторизована')
+        except Exception as e:
+            await conv.send_message(f'Ошибка: {e}')
+        finally:
+            await client.disconnect()
+
+
 @bot.on(events.NewMessage(pattern='/add_zip|Добавить архив'))
 @notify_errors
 async def add_zip(event):
@@ -360,6 +406,7 @@ async def ping_proxy(event):
             if not await client.is_user_authorized():
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
                 account_status[session] = 'auth required'
+                pending_reauth.add(session)
             else:
                 await client.get_me()
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
@@ -504,8 +551,11 @@ async def list_chats(event):
                     proxy=proxy_conf,
                 ) as client:
                     if not await client.is_user_authorized():
-                        broken_sessions.append(f"{session}: auth required")
+                        msg = f"{session}: auth required (use /reauth {session})"
+                        await event.respond(msg)
+                        broken_sessions.append(msg)
                         account_status[session] = 'auth required'
+                        pending_reauth.add(session)
                         proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
                         continue
                     result = await client(
@@ -720,7 +770,8 @@ async def test(event):
             if not await client.is_user_authorized():
                 account_status[session] = 'auth required'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-                await event.respond(f'{session}: auth required')
+                pending_reauth.add(session)
+                await event.respond(f'{session}: auth required (use /reauth {session})')
                 return
             await client.send_message(parts[1], msg)
             proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
@@ -778,7 +829,10 @@ async def send_all(event):
                     await client.disconnect()
                     account_status[session] = 'auth required'
                     proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-                    broken_sessions.append(f"{session}: auth required")
+                    pending_reauth.add(session)
+                    broken_sessions.append(
+                        f"{session}: auth required (use /reauth {session})"
+                    )
                     continue
                 clients[session] = client
                 account_status[session] = 'ok'
