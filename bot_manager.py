@@ -357,8 +357,13 @@ async def ping_proxy(event):
         )
         try:
             await client.connect()
-            await client.get_me()
-            proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+            if not await client.is_user_authorized():
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                account_status[session] = 'auth required'
+            else:
+                await client.get_me()
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                account_status[session] = 'ok'
         except Exception:
             proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
         finally:
@@ -498,6 +503,11 @@ async def list_chats(event):
                     api_hash,
                     proxy=proxy_conf,
                 ) as client:
+                    if not await client.is_user_authorized():
+                        broken_sessions.append(f"{session}: auth required")
+                        account_status[session] = 'auth required'
+                        proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                        continue
                     result = await client(
                         GetDialogsRequest(
                             offset_date=None,
@@ -707,6 +717,11 @@ async def test(event):
             api_hash,
             proxy=proxy_conf,
         ) as client:
+            if not await client.is_user_authorized():
+                account_status[session] = 'auth required'
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                await event.respond(f'{session}: auth required')
+                return
             await client.send_message(parts[1], msg)
             proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
     await event.respond('Отправлено')
@@ -758,7 +773,13 @@ async def send_all(event):
                 proxy=parse_proxy(proxy_str),
             )
             try:
-                await client.start()
+                await client.connect()
+                if not await client.is_user_authorized():
+                    await client.disconnect()
+                    account_status[session] = 'auth required'
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                    broken_sessions.append(f"{session}: auth required")
+                    continue
                 clients[session] = client
                 account_status[session] = 'ok'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
@@ -768,6 +789,7 @@ async def send_all(event):
                 broken_sessions.append(
                     f"{session}: {type(e).__name__}: {e}"
                 )
+                await client.disconnect()
 
         if broken_sessions:
             await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
