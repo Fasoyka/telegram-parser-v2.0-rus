@@ -340,7 +340,11 @@ async def ping_proxy(event):
     if not proxy_map:
         await event.respond('Нет сессий')
         return
-    for session, p in proxy_map.items():
+    status = await event.respond('Проверка прокси...')
+    items = list(proxy_map.items())
+    total = len(items)
+    for idx, (session, p) in enumerate(items, 1):
+        await status.edit(f'Проверка {idx}/{total}')
         if not p:
             proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
             continue
@@ -359,7 +363,7 @@ async def ping_proxy(event):
             proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
         finally:
             await client.disconnect()
-    await event.respond('Проверка прокси завершена')
+    await status.edit('Проверка прокси завершена')
 
 
 @bot.on(events.NewMessage(pattern='/get_proxy|Скачать прокси'))
@@ -466,16 +470,19 @@ async def send_users_file(event):
 @bot.on(events.NewMessage(pattern='/chats|Чаты'))
 @notify_errors
 async def list_chats(event):
+    status = await event.respond('Собираю список чатов...')
     async with session_lock:
         proxy_map = await get_proxy_map()
         sessions = await get_sessions()
         if not sessions:
-            await event.respond('Нет аккаунтов')
+            await status.edit('Нет аккаунтов')
             return
         groups = []
         chat_map = []
         seen_ids = set()
-        for session in sessions:
+        total = len(sessions)
+        for idx, session in enumerate(sessions, 1):
+            await status.edit(f'Обработка аккаунта {idx}/{total}')
             proxy_str = proxy_map.get(session)
             if not proxy_str:
                 continue
@@ -505,8 +512,9 @@ async def list_chats(event):
                     except AttributeError:
                         continue
         if not chat_map:
-            await event.respond('Нет доступных групп')
+            await status.edit('Нет доступных групп')
             return
+        await status.edit('Список чатов готов')
         global available_chats
         available_chats = chat_map
         lines = [f'{i} - {title}' for i, title in enumerate(groups)]
@@ -540,13 +548,16 @@ async def parse_command(event):
         except (ValueError, IndexError):
             await event.respond('Неверный номер чата')
             return
+    status = await event.respond('Парсинг запущен...')
     async with session_lock:
         opts = getoptions()
         parse_ids = opts[2].strip() == 'True'
         parse_names = opts[3].strip() == 'True'
         proxy_map = await get_proxy_map()
         created_files = []
-        for session, chat in targets:
+        total = len(targets)
+        for idx, (session, chat) in enumerate(targets, 1):
+            await status.edit(f'Парсинг {idx}/{total}')
             proxy_str = proxy_map.get(session)
             if not proxy_str:
                 continue
@@ -582,7 +593,7 @@ async def parse_command(event):
         msg = 'Спаршено'
         if created_files:
             msg += ': ' + ', '.join(created_files)
-        await event.respond(msg)
+        await status.edit(msg)
 
 
 @bot.on(events.NewMessage(pattern='/lists|Списки'))
@@ -741,12 +752,12 @@ async def send_all(event):
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
             return
-
+        status = await event.respond(f'Рассылка запущена... 0/{len(users)}')
         queue = deque(clients.items())
         failed_users = []
         log_lines = []
 
-        for user in users:
+        for idx, user in enumerate(users, 1):
             delivered = False
             attempts = 0
             error_text = ''
@@ -769,6 +780,7 @@ async def send_all(event):
             if not delivered:
                 failed_users.append(user)
                 log_lines.append(f'{user}: {error_text or "failed"}')
+            await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
 
         for _, client in queue:
             await client.disconnect()
@@ -784,6 +796,7 @@ async def send_all(event):
             f'Доставлено: {delivered_count}\n'
             f'Ошибок: {failed_count}'
         )
+        await status.edit('Рассылка завершена')
         if failed_users:
             await event.respond(stats + '\nНе доставлено: ' + ', '.join(failed_users))
         else:
@@ -870,12 +883,12 @@ async def send_reply(event):
         if not clients:
             await event.respond('Нет рабочих аккаунтов')
             return
-
+        status = await event.respond(f'Рассылка запущена... 0/{len(users)}')
         queue = deque(clients.items())
         failed_users = []
         log_lines = []
 
-        for user in users:
+        for idx, user in enumerate(users, 1):
             delivered = False
             attempts = 0
             error_text = ''
@@ -906,6 +919,7 @@ async def send_reply(event):
             if not delivered:
                 failed_users.append(user)
                 log_lines.append(f'{user}: {error_text or "failed"}')
+            await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
 
         for session, client in list(clients.items()):
             usernames = pending.get(session, set())
@@ -931,6 +945,7 @@ async def send_reply(event):
             f'Доставлено: {delivered_count}\n'
             f'Ошибок: {failed_count}'
         )
+        await status.edit('Рассылка завершена')
         if failed_users:
             await event.respond(
                 stats + '\nНе доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато'
