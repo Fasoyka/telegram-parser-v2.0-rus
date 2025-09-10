@@ -532,6 +532,7 @@ async def list_chats(event):
         groups = []
         chat_map = []
         broken_sessions = []
+        reauth_sessions = []
         seen_ids = set()
         total = len(sessions)
         for idx, session in enumerate(sessions, 1):
@@ -543,40 +544,44 @@ async def list_chats(event):
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                 continue
             proxy_conf = parse_proxy(proxy_str)
+            client = TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=proxy_conf,
+            )
             try:
-                async with TelegramClient(
-                    os.path.join(SESSIONS_DIR, session),
-                    api_id,
-                    api_hash,
-                    proxy=proxy_conf,
-                ) as client:
-                    if not await client.is_user_authorized():
-                        msg = f"{session}: auth required (use /reauth {session})"
-                        await event.respond(msg)
-                        broken_sessions.append(msg)
-                        account_status[session] = 'auth required'
-                        pending_reauth.add(session)
-                        proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-                        continue
-                    result = await client(
-                        GetDialogsRequest(
-                            offset_date=None,
-                            offset_id=0,
-                            offset_peer=InputPeerEmpty(),
-                            limit=200,
-                            hash=0,
-                        )
-                    )
+                await client.connect()
+                try:
+                    authorized = await client.is_user_authorized()
+                except Exception:
+                    authorized = False
+                if not authorized:
+                    msg = f"{session}: auth required (use /reauth {session})"
+                    reauth_sessions.append(msg)
+                    account_status[session] = 'auth required'
+                    pending_reauth.add(session)
                     proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-                    account_status[session] = 'ok'
-                    for chat in result.chats:
-                        try:
-                            if chat.megagroup and chat.id not in seen_ids:
-                                seen_ids.add(chat.id)
-                                groups.append(f"{chat.title} ({session})")
-                                chat_map.append((session, chat))
-                        except AttributeError:
-                            continue
+                    continue
+                result = await client(
+                    GetDialogsRequest(
+                        offset_date=None,
+                        offset_id=0,
+                        offset_peer=InputPeerEmpty(),
+                        limit=200,
+                        hash=0,
+                    )
+                )
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                account_status[session] = 'ok'
+                for chat in result.chats:
+                    try:
+                        if chat.megagroup and chat.id not in seen_ids:
+                            seen_ids.add(chat.id)
+                            groups.append(f"{chat.title} ({session})")
+                            chat_map.append((session, chat))
+                    except AttributeError:
+                        continue
             except Exception as e:
                 broken_sessions.append(
                     f"{session}: {type(e).__name__}: {e}"
@@ -584,8 +589,15 @@ async def list_chats(event):
                 account_status[session] = f'error: {type(e).__name__}'
                 proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                 continue
+            finally:
+                await client.disconnect()
         if broken_sessions:
             await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
+        if reauth_sessions:
+            await event.respond(
+                'Сессии, требующие повторной авторизации:\n' +
+                '\n'.join(reauth_sessions)
+            )
         if not chat_map:
             await status.edit('Нет доступных групп')
             return
