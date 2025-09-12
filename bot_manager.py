@@ -147,6 +147,7 @@ async def start(event):
         [Button.text('Списки'), Button.text('Очистить пользователей')],
         [Button.text('Логи отправки'), Button.text('Сессии')],
         [
+            Button.text('Добавить список'),
             Button.text('Добавить сессию'),
             Button.text('Добавить архив'),
             Button.text('Добавить прокси'),
@@ -165,6 +166,7 @@ async def start(event):
         '/parse <номер> - спарсить чат\n'
         '/del_list <номер> - удалить список\n'
         '/split <номер> <частей> - разделить список\n'
+        '/add_list - добавить список (.txt или .zip)\n'
         '/test <username> - тестовая отправка\n'
         '/send <номер> - запустить рассылку\n'
         '/send_reply <номер> - рассылка с ответом\n'
@@ -752,6 +754,45 @@ async def split_list(event):
             pf.write('\n'.join(users[start:end]))
         start = end
     await event.respond('Список разделён')
+
+
+@bot.on(events.NewMessage(pattern='/add_list|Добавить список'))
+@notify_errors
+async def add_list_cmd(event):
+    async def process(message, send):
+        fname = message.file.name
+        if fname.endswith('.zip'):
+            await send('Архив принят, обрабатывается...')
+            data = BytesIO()
+            await message.download_media(file=data)
+            data.seek(0)
+            with zipfile.ZipFile(data) as zf:
+                txt_files = [n for n in zf.namelist() if n.endswith('.txt')]
+                if not txt_files:
+                    await send('Ошибка: .txt файлы не найдены')
+                    return
+                for name in txt_files:
+                    dest = os.path.join(LISTS_DIR, os.path.basename(name))
+                    with zf.open(name) as src, open(dest, 'wb') as dst:
+                        dst.write(src.read())
+            await send(f'Добавлено списков: {len(txt_files)}')
+        elif fname.endswith('.txt'):
+            path = os.path.join(LISTS_DIR, fname)
+            await message.download_media(file=path)
+            await send('Список пользователей сохранён')
+        else:
+            await send('Ошибка: файл должен быть .txt или .zip')
+
+    if event.message.file and event.message.file.name.endswith(('.zip', '.txt')):
+        await process(event.message, event.respond)
+        return
+    async with bot.conversation(event.chat_id, timeout=60) as conv:
+        await conv.send_message('Отправьте .txt файл или .zip архив со списками')
+        response = await conv.get_response()
+        if response.file and response.file.name.endswith(('.zip', '.txt')):
+            await process(response, conv.send_message)
+        else:
+            await conv.send_message('Ошибка: файл не получен')
 
 @bot.on(events.NewMessage(pattern='/test'))
 @notify_errors
