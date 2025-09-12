@@ -28,6 +28,7 @@ bot = TelegramClient('manager_bot', api_id, api_hash).start(bot_token=bot_token)
 
 PROXY_FILE = 'proxies.txt'
 DELAY_FILE = 'delay.txt'
+RETRY_DELAY_FILE = 'retry_delay.txt'
 
 
 def load_delay():
@@ -46,6 +47,25 @@ def save_delay(value):
 
 
 message_delay = load_delay()
+
+
+def load_retry_delay():
+    if os.path.exists(RETRY_DELAY_FILE):
+        try:
+            with open(RETRY_DELAY_FILE) as f:
+                return float(f.read().strip())
+        except ValueError:
+            pass
+    return 60.0
+
+
+def save_retry_delay(value):
+    with open(RETRY_DELAY_FILE, 'w') as f:
+        f.write(str(value))
+
+
+retry_delay = load_retry_delay()
+resend_task = None
 
 
 async def get_sessions():
@@ -130,6 +150,167 @@ async def get_proxy_map():
     }
 
 
+async def broadcast(users, msg, chat_id):
+    async with session_lock:
+        proxy_map = await get_proxy_map()
+        sessions = await get_sessions()
+        if not sessions:
+            await bot.send_message(chat_id, 'Нет аккаунтов')
+            return []
+
+        clients = {}
+        account_status.clear()
+        broken_sessions = []
+        for session in sessions:
+            proxy_str = proxy_map.get(session)
+            if not proxy_str:
+                account_status[session] = 'no proxy'
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                broken_sessions.append(f"{session}: no proxy")
+                continue
+            client = TelegramClient(
+                os.path.join(SESSIONS_DIR, session),
+                api_id,
+                api_hash,
+                proxy=parse_proxy(proxy_str),
+            )
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    await client.disconnect()
+                    account_status[session] = 'auth required'
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+                    pending_reauth.add(session)
+                    broken_sessions.append(
+                        f"{session}: auth required (use /reauth {session})"
+                    )
+                    continue
+                clients[session] = client
+                account_status[session] = 'ok'
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
+            except Exception as e:
+                account_status[session] = f'error: {type(e).__name__}'
+                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                broken_sessions.append(
+                    f"{session}: {type(e).__name__}: {e}"
+                )
+                await client.disconnect()
+
+        if broken_sessions:
+            await bot.send_message(
+                chat_id, 'Проблемные сессии:\n' + '\n'.join(broken_sessions)
+            )
+        if not clients:
+            await bot.send_message(chat_id, 'Нет рабочих аккаунтов')
+            return []
+
+        status = await bot.send_message(chat_id, f'Рассылка запущена... 0/{len(users)}')
+        queue = deque(clients.items())
+        failed_users = []
+        log_lines = []
+        failed_sessions = set()
+
+        for idx, user in enumerate(users, 1):
+            delivered = False
+            attempts = 0
+            error_text = ''
+            while queue and attempts < len(queue):
+                session, client = queue[0]
+                try:
+                    await client.send_message(user, msg)
+                    queue.rotate(-1)
+                    delivered = True
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
+                    )
+                    await asyncio.sleep(message_delay)
+                    break
+                except FloodWaitError as e:
+                    wait_for = e.seconds
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
+                    )
+                    queue.rotate(-1)
+                    attempts += 1
+                    await asyncio.sleep(wait_for)
+                except Exception as e:
+                    await client.disconnect()
+                    account_status[session] = f'error: {type(e).__name__}'
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                    queue.popleft()
+                    attempts += 1
+                    error_text = f'{type(e).__name__}: {e}'
+                    failed_sessions.add(
+                        f"{session}: {type(e).__name__}: {e}"
+                    )
+            if not delivered:
+                failed_users.append(user)
+                log_lines.append(
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text or 'failed'}"
+                )
+            await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
+
+        for _, client in queue:
+            await client.disconnect()
+
+        if failed_sessions:
+            await bot.send_message(
+                chat_id, 'Сломанные сессии:\n' + '\n'.join(failed_sessions)
+            )
+
+        with open('send_log.txt', 'w') as log_file:
+            log_file.write('\n'.join(log_lines))
+
+        total = len(users)
+        delivered_count = total - len(failed_users)
+        failed_count = len(failed_users)
+        stats = (
+            f'Всего пользователей: {total}\n'
+            f'Доставлено: {delivered_count}\n'
+            f'Ошибок: {failed_count}'
+        )
+        await status.edit('Рассылка завершена')
+        if failed_users:
+            await bot.send_message(
+                chat_id, stats + '\nНе доставлено: ' + ', '.join(failed_users)
+            )
+        else:
+            await bot.send_message(chat_id, 'Рассылка завершена\n' + stats)
+
+        return failed_users
+
+
+async def schedule_resend(failed_users, msg, chat_id, base_name):
+    global resend_task
+    if resend_task and not resend_task.done():
+        resend_task.cancel()
+
+    timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
+    failed_file = os.path.join(
+        LISTS_DIR, f'failed_{base_name}_{timestamp}.txt'
+    )
+    with open(failed_file, 'w') as f:
+        f.write('\n'.join(failed_users))
+
+    await bot.send_message(
+        chat_id,
+        f'Через {retry_delay} секунд будет отправлена повторная рассылка по failed юзерам',
+    )
+
+    async def task():
+        try:
+            await asyncio.sleep(retry_delay)
+            with open(failed_file) as f:
+                users = [u.strip() for u in f if u.strip()]
+            if users:
+                await broadcast(users, msg, chat_id)
+        except asyncio.CancelledError:
+            await bot.send_message(chat_id, 'Повторная рассылка отменена')
+            raise
+
+    resend_task = asyncio.create_task(task())
+
+
 def notify_errors(func):
     @wraps(func)
     async def wrapper(event, *args, **kwargs):
@@ -161,6 +342,7 @@ async def start(event):
         '/set_message1 <текст> - сообщение #1\n'
         '/set_message2 <текст> - сообщение #2\n'
         '/set_delay <сек> - задержка между сообщениями\n'
+        '/set_retry <сек> - задержка повторной отправки\n'
         '/add_user <username> - добавить пользователя\n'
         '/users <номер> - отправить список\n'
         '/parse <номер> - спарсить чат\n'
@@ -170,6 +352,7 @@ async def start(event):
         '/test <username> - тестовая отправка\n'
         '/send <номер> - запустить рассылку\n'
         '/send_reply <номер> - рассылка с ответом\n'
+        '/cancel_resend - отменить повторную рассылку\n'
         '/del_session <имя> - удалить сессию\n'
         '/reauth <имя> - повторная авторизация сессии\n'
         '/add_session - добавить .session\n'
@@ -485,6 +668,36 @@ async def set_delay_cmd(event):
     message_delay = max(0, value)
     save_delay(message_delay)
     await event.respond(f'Задержка установлена: {message_delay} c')
+
+
+@bot.on(events.NewMessage(pattern='/set_retry'))
+@notify_errors
+async def set_retry_cmd(event):
+    parts = event.raw_text.split()
+    if len(parts) < 2:
+        await event.respond('Использование: /set_retry секунды')
+        return
+    try:
+        value = float(parts[1])
+    except ValueError:
+        await event.respond('Введите число секунд')
+        return
+    global retry_delay
+    retry_delay = max(0, value)
+    save_retry_delay(retry_delay)
+    await event.respond(f'Повторная отправка через: {retry_delay} c')
+
+
+@bot.on(events.NewMessage(pattern='/cancel_resend'))
+@notify_errors
+async def cancel_resend_cmd(event):
+    global resend_task
+    if resend_task and not resend_task.done():
+        resend_task.cancel()
+        resend_task = None
+        await event.respond('Повторная рассылка отменена')
+    else:
+        await event.respond('Нет запланированной рассылки')
 
 
 @bot.on(events.NewMessage(pattern='/add_user'))
@@ -855,126 +1068,13 @@ async def send_all(event):
     if not users:
         await event.respond('Нет пользователей для рассылки')
         return
-    async with session_lock:
-        proxy_map = await get_proxy_map()
-        sessions = await get_sessions()
-        if not sessions:
-            await event.respond('Нет аккаунтов')
-            return
-        with open(MESSAGE_FILE) as f:
-            msg = f.read()
+    with open(MESSAGE_FILE) as f:
+        msg = f.read()
 
-        clients = {}
-        account_status.clear()
-        broken_sessions = []
-        for session in sessions:
-            proxy_str = proxy_map.get(session)
-            if not proxy_str:
-                account_status[session] = 'no proxy'
-                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
-                broken_sessions.append(f"{session}: no proxy")
-                continue
-            client = TelegramClient(
-                os.path.join(SESSIONS_DIR, session),
-                api_id,
-                api_hash,
-                proxy=parse_proxy(proxy_str),
-            )
-            try:
-                await client.connect()
-                if not await client.is_user_authorized():
-                    await client.disconnect()
-                    account_status[session] = 'auth required'
-                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-                    pending_reauth.add(session)
-                    broken_sessions.append(
-                        f"{session}: auth required (use /reauth {session})"
-                    )
-                    continue
-                clients[session] = client
-                account_status[session] = 'ok'
-                proxy_status[session] = {'time': datetime.now(UTC), 'alive': True}
-            except Exception as e:
-                account_status[session] = f'error: {type(e).__name__}'
-                proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
-                broken_sessions.append(
-                    f"{session}: {type(e).__name__}: {e}"
-                )
-                await client.disconnect()
-
-        if broken_sessions:
-            await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
-        if not clients:
-            await event.respond('Нет рабочих аккаунтов')
-            return
-        status = await event.respond(f'Рассылка запущена... 0/{len(users)}')
-        queue = deque(clients.items())
-        failed_users = []
-        log_lines = []
-        failed_sessions = set()
-
-        for idx, user in enumerate(users, 1):
-            delivered = False
-            attempts = 0
-            error_text = ''
-            while queue and attempts < len(queue):
-                session, client = queue[0]
-                try:
-                    await client.send_message(user, msg)
-                    queue.rotate(-1)
-                    delivered = True
-                    log_lines.append(
-                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
-                    )
-                    await asyncio.sleep(message_delay)
-                    break
-                except FloodWaitError as e:
-                    wait_for = e.seconds
-                    log_lines.append(
-                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
-                    )
-                    queue.rotate(-1)
-                    attempts += 1
-                    await asyncio.sleep(wait_for)
-                except Exception as e:
-                    await client.disconnect()
-                    account_status[session] = f'error: {type(e).__name__}'
-                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
-                    queue.popleft()
-                    attempts += 1
-                    error_text = f'{type(e).__name__}: {e}'
-                    failed_sessions.add(
-                        f"{session}: {type(e).__name__}: {e}"
-                    )
-            if not delivered:
-                failed_users.append(user)
-                log_lines.append(
-                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text or 'failed'}"
-                )
-            await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
-
-        for _, client in queue:
-            await client.disconnect()
-
-        if failed_sessions:
-            await event.respond('Сломанные сессии:\n' + '\n'.join(failed_sessions))
-
-        with open('send_log.txt', 'w') as log_file:
-            log_file.write('\n'.join(log_lines))
-
-        total = len(users)
-        delivered_count = total - len(failed_users)
-        failed_count = len(failed_users)
-        stats = (
-            f'Всего пользователей: {total}\n'
-            f'Доставлено: {delivered_count}\n'
-            f'Ошибок: {failed_count}'
-        )
-        await status.edit('Рассылка завершена')
-        if failed_users:
-            await event.respond(stats + '\nНе доставлено: ' + ', '.join(failed_users))
-        else:
-            await event.respond('Рассылка завершена\n' + stats)
+    failed_users = await broadcast(users, msg, event.chat_id)
+    if failed_users:
+        base_name = os.path.splitext(os.path.basename(fname))[0]
+        await schedule_resend(failed_users, msg, event.chat_id, base_name)
 
 
 @bot.on(events.NewMessage(pattern=r'/send_reply(?:\s|$)'))
@@ -1147,6 +1247,8 @@ async def send_reply(event):
             await event.respond(
                 stats + '\nНе доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато'
             )
+            base_name = os.path.splitext(os.path.basename(fname))[0]
+            await schedule_resend(failed_users, msg1, event.chat_id, base_name)
         else:
             await event.respond('Рассылка завершена. Ожидание ответов начато\n' + stats)
 
