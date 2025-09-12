@@ -26,6 +26,13 @@ bot_token = options[4].strip()
 
 bot = TelegramClient('manager_bot', api_id, api_hash).start(bot_token=bot_token)
 
+ADMIN_IDS = [495338343, 293671393]
+
+
+async def notify_admins(text):
+    for admin_id in ADMIN_IDS:
+        await bot.send_message(admin_id, text)
+
 PROXY_FILE = 'proxies.txt'
 DELAY_FILE = 'delay.txt'
 RETRY_DELAY_FILE = 'retry_delay.txt'
@@ -155,7 +162,7 @@ async def broadcast(users, msg, chat_id):
         proxy_map = await get_proxy_map()
         sessions = await get_sessions()
         if not sessions:
-            await bot.send_message(chat_id, 'Нет аккаунтов')
+            await notify_admins('Нет аккаунтов')
             return []
 
         clients = {}
@@ -197,14 +204,15 @@ async def broadcast(users, msg, chat_id):
                 await client.disconnect()
 
         if broken_sessions:
-            await bot.send_message(
-                chat_id, 'Проблемные сессии:\n' + '\n'.join(broken_sessions)
-            )
+            await notify_admins('Проблемные сессии:\n' + '\n'.join(broken_sessions))
         if not clients:
-            await bot.send_message(chat_id, 'Нет рабочих аккаунтов')
+            await notify_admins('Нет рабочих аккаунтов')
             return []
 
-        status = await bot.send_message(chat_id, f'Рассылка запущена... 0/{len(users)}')
+        status_msgs = {
+            admin: await bot.send_message(admin, f'Рассылка запущена... 0/{len(users)}')
+            for admin in ADMIN_IDS
+        }
         failed_users = []
         log_lines = []
         failed_sessions = set()
@@ -221,7 +229,8 @@ async def broadcast(users, msg, chat_id):
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
                     )
                     idx += 1
-                    await status.edit(f'Рассылка запущена... {idx}/{total}')
+                    for msg in status_msgs.values():
+                        await msg.edit(f'Рассылка запущена... {idx}/{total}')
                     await asyncio.sleep(message_delay)
                 except FloodWaitError as e:
                     wait_for = e.seconds
@@ -253,9 +262,7 @@ async def broadcast(users, msg, chat_id):
                 )
 
         if failed_sessions:
-            await bot.send_message(
-                chat_id, 'Сломанные сессии:\n' + '\n'.join(failed_sessions)
-            )
+            await notify_admins('Сломанные сессии:\n' + '\n'.join(failed_sessions))
 
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
@@ -267,13 +274,12 @@ async def broadcast(users, msg, chat_id):
             f'Доставлено: {delivered_count}\n'
             f'Ошибок: {failed_count}'
         )
-        await status.edit('Рассылка завершена')
+        for msg in status_msgs.values():
+            await msg.edit('Рассылка завершена')
         if failed_users:
-            await bot.send_message(
-                chat_id, stats + '\nНе доставлено: ' + ', '.join(failed_users)
-            )
+            await notify_admins(stats + '\nНе доставлено: ' + ', '.join(failed_users))
         else:
-            await bot.send_message(chat_id, 'Рассылка завершена\n' + stats)
+            await notify_admins('Рассылка завершена\n' + stats)
 
         return failed_users
 
@@ -292,9 +298,8 @@ async def schedule_resend(failed_users, msg, chat_id, base_name):
                 )
                 with open(failed_file, 'w') as f:
                     f.write('\n'.join(current))
-                await bot.send_message(
-                    chat_id,
-                    f'Через {retry_delay} секунд будет отправлена повторная рассылка по failed юзерам',
+                await notify_admins(
+                    f'Через {retry_delay} секунд будет отправлена повторная рассылка по failed юзерам'
                 )
                 await asyncio.sleep(retry_delay)
                 with open(failed_file) as f:
@@ -304,7 +309,7 @@ async def schedule_resend(failed_users, msg, chat_id, base_name):
                 else:
                     current = []
         except asyncio.CancelledError:
-            await bot.send_message(chat_id, 'Повторная рассылка отменена')
+            await notify_admins('Повторная рассылка отменена')
             raise
 
     resend_task = asyncio.create_task(task())
@@ -1065,7 +1070,7 @@ async def send_all(event):
     with open(fname) as f:
         users = [u.strip() for u in f if u.strip()]
     if not users:
-        await event.respond('Нет пользователей для рассылки')
+        await notify_admins('Нет пользователей для рассылки')
         return
     with open(MESSAGE_FILE) as f:
         msg = f.read()
@@ -1095,7 +1100,7 @@ async def send_reply(event):
     with open(fname) as f:
         users = [u.strip() for u in f if u.strip()]
     if not users:
-        await event.respond('Нет пользователей для рассылки')
+        await notify_admins('Нет пользователей для рассылки')
         return
     # Remove completed reply watchers
     for session, info in list(reply_watchers.items()):
@@ -1107,7 +1112,7 @@ async def send_reply(event):
         proxy_map = await get_proxy_map()
         sessions = await get_sessions()
         if not sessions:
-            await event.respond('Нет аккаунтов')
+            await notify_admins('Нет аккаунтов')
             return
         with open(MESSAGE1_FILE) as f:
             msg1 = f.read()
@@ -1161,11 +1166,14 @@ async def send_reply(event):
                 )
 
         if broken_sessions:
-            await event.respond('Проблемные сессии:\n' + '\n'.join(broken_sessions))
+            await notify_admins('Проблемные сессии:\n' + '\n'.join(broken_sessions))
         if not clients:
-            await event.respond('Нет рабочих аккаунтов')
+            await notify_admins('Нет рабочих аккаунтов')
             return
-        status = await event.respond(f'Рассылка запущена... 0/{len(users)}')
+        status_msgs = {
+            admin: await bot.send_message(admin, f'Рассылка запущена... 0/{len(users)}')
+            for admin in ADMIN_IDS
+        }
         failed_users = []
         log_lines = []
         failed_sessions = set()
@@ -1185,7 +1193,8 @@ async def send_reply(event):
                     )
                     pending[session].add(username_clean.lower())
                     idx += 1
-                    await status.edit(f'Рассылка запущена... {idx}/{total}')
+                    for msg in status_msgs.values():
+                        await msg.edit(f'Рассылка запущена... {idx}/{total}')
                     await asyncio.sleep(message_delay)
                 except FloodWaitError as e:
                     wait_for = e.seconds
@@ -1229,7 +1238,7 @@ async def send_reply(event):
                 await client.disconnect()
 
         if failed_sessions:
-            await event.respond('Сломанные сессии:\n' + '\n'.join(failed_sessions))
+            await notify_admins('Сломанные сессии:\n' + '\n'.join(failed_sessions))
 
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
@@ -1242,15 +1251,16 @@ async def send_reply(event):
             f'Доставлено: {delivered_count}\n'
             f'Ошибок: {failed_count}'
         )
-        await status.edit('Рассылка завершена')
+        for msg in status_msgs.values():
+            await msg.edit('Рассылка завершена')
         if failed_users:
-            await event.respond(
+            await notify_admins(
                 stats + '\nНе доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато'
             )
             base_name = os.path.splitext(os.path.basename(fname))[0]
             await schedule_resend(failed_users, msg1, event.chat_id, base_name)
         else:
-            await event.respond('Рассылка завершена. Ожидание ответов начато\n' + stats)
+            await notify_admins('Рассылка завершена. Ожидание ответов начато\n' + stats)
 
 @bot.on(events.NewMessage(pattern='/end|Логи отправки'))
 @notify_errors
