@@ -205,53 +205,52 @@ async def broadcast(users, msg, chat_id):
             return []
 
         status = await bot.send_message(chat_id, f'Рассылка запущена... 0/{len(users)}')
-        queue = deque(clients.items())
         failed_users = []
         log_lines = []
         failed_sessions = set()
 
-        for idx, user in enumerate(users, 1):
-            delivered = False
-            attempts = 0
-            error_text = ''
-            while queue and attempts < len(queue):
-                session, client = queue[0]
+        idx = 0
+        total = len(users)
+        sessions_list = list(clients.items())
+        for session, client in sessions_list:
+            while idx < total:
+                user = users[idx]
                 try:
                     await client.send_message(user, msg)
-                    queue.rotate(-1)
-                    delivered = True
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
                     )
+                    idx += 1
+                    await status.edit(f'Рассылка запущена... {idx}/{total}')
                     await asyncio.sleep(message_delay)
-                    break
                 except FloodWaitError as e:
                     wait_for = e.seconds
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
                     )
-                    queue.rotate(-1)
-                    attempts += 1
-                    await asyncio.sleep(wait_for)
+                    # Переходим к следующей сессии, не увеличивая idx
+                    break
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
                     proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
-                    queue.popleft()
-                    attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
-                    failed_sessions.add(
-                        f"{session}: {type(e).__name__}: {e}"
+                    failed_sessions.add(f"{session}: {type(e).__name__}: {e}")
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text}"
                     )
-            if not delivered:
+                    # Переходим к следующей сессии, не увеличивая idx
+                    break
+            await client.disconnect()
+            if idx >= total:
+                break
+
+        if idx < total:
+            for user in users[idx:]:
                 failed_users.append(user)
                 log_lines.append(
-                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text or 'failed'}"
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: failed"
                 )
-            await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
-
-        for _, client in queue:
-            await client.disconnect()
 
         if failed_sessions:
             await bot.send_message(
@@ -261,7 +260,6 @@ async def broadcast(users, msg, chat_id):
         with open('send_log.txt', 'w') as log_file:
             log_file.write('\n'.join(log_lines))
 
-        total = len(users)
         delivered_count = total - len(failed_users)
         failed_count = len(failed_users)
         stats = (
@@ -284,26 +282,27 @@ async def schedule_resend(failed_users, msg, chat_id, base_name):
     global resend_task
     if resend_task and not resend_task.done():
         resend_task.cancel()
-
-    timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
-    failed_file = os.path.join(
-        LISTS_DIR, f'failed_{base_name}_{timestamp}.txt'
-    )
-    with open(failed_file, 'w') as f:
-        f.write('\n'.join(failed_users))
-
-    await bot.send_message(
-        chat_id,
-        f'Через {retry_delay} секунд будет отправлена повторная рассылка по failed юзерам',
-    )
-
     async def task():
+        current = failed_users
         try:
-            await asyncio.sleep(retry_delay)
-            with open(failed_file) as f:
-                users = [u.strip() for u in f if u.strip()]
-            if users:
-                await broadcast(users, msg, chat_id)
+            while current:
+                timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
+                failed_file = os.path.join(
+                    LISTS_DIR, f'failed_{base_name}_{timestamp}.txt'
+                )
+                with open(failed_file, 'w') as f:
+                    f.write('\n'.join(current))
+                await bot.send_message(
+                    chat_id,
+                    f'Через {retry_delay} секунд будет отправлена повторная рассылка по failed юзерам',
+                )
+                await asyncio.sleep(retry_delay)
+                with open(failed_file) as f:
+                    users = [u.strip() for u in f if u.strip()]
+                if users:
+                    current = await broadcast(users, msg, chat_id)
+                else:
+                    current = []
         except asyncio.CancelledError:
             await bot.send_message(chat_id, 'Повторная рассылка отменена')
             raise
@@ -1167,58 +1166,59 @@ async def send_reply(event):
             await event.respond('Нет рабочих аккаунтов')
             return
         status = await event.respond(f'Рассылка запущена... 0/{len(users)}')
-        queue = deque(clients.items())
         failed_users = []
         log_lines = []
         failed_sessions = set()
 
-        for idx, user in enumerate(users, 1):
-            delivered = False
-            attempts = 0
-            error_text = ''
-            username_clean = user.lstrip('@')
-            personalized = msg1.replace('[имя]', username_clean)
-            while queue and attempts < len(queue):
-                session, client = queue[0]
+        idx = 0
+        total = len(users)
+        sessions_list = list(clients.items())
+        for session, client in sessions_list:
+            while idx < total:
+                user = users[idx]
+                username_clean = user.lstrip('@')
+                personalized = msg1.replace('[имя]', username_clean)
                 try:
                     await client.send_message(user, personalized)
-                    queue.rotate(-1)
-                    delivered = True
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
                     )
                     pending[session].add(username_clean.lower())
+                    idx += 1
+                    await status.edit(f'Рассылка запущена... {idx}/{total}')
                     await asyncio.sleep(message_delay)
-                    break
                 except FloodWaitError as e:
                     wait_for = e.seconds
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
                     )
-                    queue.rotate(-1)
-                    attempts += 1
-                    await asyncio.sleep(wait_for)
+                    # Переходим к следующей сессии, не увеличивая idx
+                    break
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
                     proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
-                    queue.popleft()
                     clients.pop(session, None)
                     pending.pop(session, None)
                     info = reply_watchers.pop(session, None)
                     if info and info.get('task'):
                         info['task'].cancel()
-                    attempts += 1
                     error_text = f'{type(e).__name__}: {e}'
-                    failed_sessions.add(
-                        f"{session}: {type(e).__name__}: {e}"
+                    failed_sessions.add(f"{session}: {type(e).__name__}: {e}")
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text}"
                     )
-            if not delivered:
+                    # Переходим к следующей сессии, не увеличивая idx
+                    break
+            if idx >= total:
+                break
+
+        if idx < total:
+            for user in users[idx:]:
                 failed_users.append(user)
                 log_lines.append(
-                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text or 'failed'}"
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: failed"
                 )
-            await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
 
         for session, client in list(clients.items()):
             usernames = pending.get(session, set())
