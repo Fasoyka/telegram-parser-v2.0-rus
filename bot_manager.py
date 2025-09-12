@@ -1,7 +1,7 @@
 from collections import deque
 from functools import wraps
 from telethon import TelegramClient, events, Button
-from telethon.errors import SessionPasswordNeededError, MessageTooLongError
+from telethon.errors import SessionPasswordNeededError, MessageTooLongError, FloodWaitError
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
 from telethon.extensions import markdown
@@ -923,9 +923,19 @@ async def send_all(event):
                     await client.send_message(user, msg)
                     queue.rotate(-1)
                     delivered = True
-                    log_lines.append(f'{user}: delivered')
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
+                    )
                     await asyncio.sleep(message_delay)
                     break
+                except FloodWaitError as e:
+                    wait_for = e.seconds
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
+                    )
+                    queue.rotate(-1)
+                    attempts += 1
+                    await asyncio.sleep(wait_for)
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
@@ -938,7 +948,9 @@ async def send_all(event):
                     )
             if not delivered:
                 failed_users.append(user)
-                log_lines.append(f'{user}: {error_text or "failed"}')
+                log_lines.append(
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text or 'failed'}"
+                )
             await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
 
         for _, client in queue:
@@ -1072,10 +1084,20 @@ async def send_reply(event):
                     await client.send_message(user, personalized)
                     queue.rotate(-1)
                     delivered = True
-                    log_lines.append(f'{user}: delivered')
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
+                    )
                     pending[session].add(username_clean.lower())
                     await asyncio.sleep(message_delay)
                     break
+                except FloodWaitError as e:
+                    wait_for = e.seconds
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
+                    )
+                    queue.rotate(-1)
+                    attempts += 1
+                    await asyncio.sleep(wait_for)
                 except Exception as e:
                     await client.disconnect()
                     account_status[session] = f'error: {type(e).__name__}'
@@ -1093,7 +1115,9 @@ async def send_reply(event):
                     )
             if not delivered:
                 failed_users.append(user)
-                log_lines.append(f'{user}: {error_text or "failed"}')
+                log_lines.append(
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text or 'failed'}"
+                )
             await status.edit(f'Рассылка запущена... {idx}/{len(users)}')
 
         for session, client in list(clients.items()):
