@@ -1,7 +1,12 @@
 from collections import deque
 from functools import wraps
 from telethon import TelegramClient, events, Button
-from telethon.errors import SessionPasswordNeededError, MessageTooLongError, FloodWaitError
+from telethon.errors import (
+    SessionPasswordNeededError,
+    MessageTooLongError,
+    FloodWaitError,
+    RPCError,
+)
 from telethon.tl.functions.messages import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
 from telethon.extensions import markdown
@@ -217,49 +222,55 @@ async def broadcast(users, msg, chat_id):
         log_lines = []
         failed_sessions = set()
 
-        idx = 0
         total = len(users)
-        sessions_list = list(clients.items())
-        for session, client in sessions_list:
-            while idx < total:
-                user = users[idx]
+        sent = 0
+
+        for user in users:
+            delivered = False
+            for session, client in list(clients.items()):
                 try:
                     await client.send_message(user, msg)
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
                     )
-                    idx += 1
-                    for msg in status_msgs.values():
-                        await msg.edit(f'Рассылка запущена... {idx}/{total}')
+                    sent += 1
+                    for m in status_msgs.values():
+                        await m.edit(f'Рассылка запущена... {sent}/{total}')
                     await asyncio.sleep(message_delay)
+                    delivered = True
+                    break
                 except FloodWaitError as e:
                     wait_for = e.seconds
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
                     )
-                    # Переходим к следующей сессии, не увеличивая idx
-                    break
-                except Exception as e:
+                    account_status[session] = f'flood wait {wait_for}s'
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
+                    failed_sessions.add(f"{session}: flood wait {wait_for}s")
                     await client.disconnect()
+                    clients.pop(session, None)
+                    break
+                except RPCError as e:
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {type(e).__name__}"
+                    )
+                    continue
+                except Exception as e:
                     account_status[session] = f'error: {type(e).__name__}'
                     proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                     error_text = f'{type(e).__name__}: {e}'
-                    failed_sessions.add(f"{session}: {type(e).__name__}: {e}")
+                    failed_sessions.add(f"{session}: {error_text}")
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text}"
                     )
-                    # Переходим к следующей сессии, не увеличивая idx
+                    await client.disconnect()
+                    clients.pop(session, None)
                     break
-            await client.disconnect()
-            if idx >= total:
-                break
-
-        if idx < total:
-            for user in users[idx:]:
+            if not delivered:
                 failed_users.append(user)
-                log_lines.append(
-                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: failed"
-                )
+
+        for client in clients.values():
+            await client.disconnect()
 
         if failed_sessions:
             await notify_admins('Сломанные сессии:\n' + '\n'.join(failed_sessions))
@@ -274,8 +285,8 @@ async def broadcast(users, msg, chat_id):
             f'Доставлено: {delivered_count}\n'
             f'Ошибок: {failed_count}'
         )
-        for msg in status_msgs.values():
-            await msg.edit('Рассылка завершена')
+        for m in status_msgs.values():
+            await m.edit('Рассылка завершена')
         if failed_users:
             await notify_admins(stats + '\nНе доставлено: ' + ', '.join(failed_users))
         else:
@@ -1178,56 +1189,63 @@ async def send_reply(event):
         log_lines = []
         failed_sessions = set()
 
-        idx = 0
         total = len(users)
-        sessions_list = list(clients.items())
-        for session, client in sessions_list:
-            while idx < total:
-                user = users[idx]
-                username_clean = user.lstrip('@')
-                personalized = msg1.replace('[имя]', username_clean)
+        sent = 0
+
+        for user in users:
+            username_clean = user.lstrip('@')
+            personalized = msg1.replace('[имя]', username_clean)
+            delivered = False
+            for session, client in list(clients.items()):
                 try:
                     await client.send_message(user, personalized)
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: delivered"
                     )
                     pending[session].add(username_clean.lower())
-                    idx += 1
-                    for msg in status_msgs.values():
-                        await msg.edit(f'Рассылка запущена... {idx}/{total}')
+                    sent += 1
+                    for m in status_msgs.values():
+                        await m.edit(f'Рассылка запущена... {sent}/{total}')
                     await asyncio.sleep(message_delay)
+                    delivered = True
+                    break
                 except FloodWaitError as e:
                     wait_for = e.seconds
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: flood wait {wait_for}s"
                     )
-                    # Переходим к следующей сессии, не увеличивая idx
-                    break
-                except Exception as e:
-                    await client.disconnect()
-                    account_status[session] = f'error: {type(e).__name__}'
+                    account_status[session] = f'flood wait {wait_for}s'
                     proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
-                    clients.pop(session, None)
-                    pending.pop(session, None)
+                    failed_sessions.add(f"{session}: flood wait {wait_for}s")
                     info = reply_watchers.pop(session, None)
                     if info and info.get('task'):
                         info['task'].cancel()
+                    await client.disconnect()
+                    clients.pop(session, None)
+                    pending.pop(session, None)
+                    break
+                except RPCError as e:
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {type(e).__name__}"
+                    )
+                    continue
+                except Exception as e:
+                    account_status[session] = f'error: {type(e).__name__}'
+                    proxy_status[session] = {'time': datetime.now(UTC), 'alive': False}
                     error_text = f'{type(e).__name__}: {e}'
-                    failed_sessions.add(f"{session}: {type(e).__name__}: {e}")
+                    failed_sessions.add(f"{session}: {error_text}")
                     log_lines.append(
                         f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {error_text}"
                     )
-                    # Переходим к следующей сессии, не увеличивая idx
+                    info = reply_watchers.pop(session, None)
+                    if info and info.get('task'):
+                        info['task'].cancel()
+                    await client.disconnect()
+                    clients.pop(session, None)
+                    pending.pop(session, None)
                     break
-            if idx >= total:
-                break
-
-        if idx < total:
-            for user in users[idx:]:
+            if not delivered:
                 failed_users.append(user)
-                log_lines.append(
-                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: failed"
-                )
 
         for session, client in list(clients.items()):
             usernames = pending.get(session, set())
@@ -1251,8 +1269,8 @@ async def send_reply(event):
             f'Доставлено: {delivered_count}\n'
             f'Ошибок: {failed_count}'
         )
-        for msg in status_msgs.values():
-            await msg.edit('Рассылка завершена')
+        for m in status_msgs.values():
+            await m.edit('Рассылка завершена')
         if failed_users:
             await notify_admins(
                 stats + '\nНе доставлено: ' + ', '.join(failed_users) + '\nОжидание ответов начато'
