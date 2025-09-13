@@ -8,7 +8,12 @@ from telethon.errors import (
     RPCError,
 )
 from telethon.tl.functions.messages import GetDialogsRequest
-from telethon.tl.types import InputPeerEmpty
+from telethon.tl.functions.users import GetRequirementsToContactRequest
+from telethon.tl.types import (
+    InputPeerEmpty,
+    RequirementToContactPremium,
+    RequirementToContactPaidMessages,
+)
 from telethon.extensions import markdown
 import os
 import asyncio
@@ -227,6 +232,35 @@ async def broadcast(users, msg, chat_id):
 
         for user in users:
             delivered = False
+            try:
+                sample_client = next(iter(clients.values()))
+                requirements = await sample_client(
+                    GetRequirementsToContactRequest([user])
+                )
+                if any(
+                    isinstance(r, (
+                        RequirementToContactPremium,
+                        RequirementToContactPaidMessages,
+                    ))
+                    for r in requirements
+                ):
+                    log_lines.append(
+                        f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: contact restricted"
+                    )
+                    failed_users.append(user)
+                    continue
+            except RPCError as e:
+                log_lines.append(
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {type(e).__name__}"
+                )
+                failed_users.append(user)
+                continue
+            except Exception as e:
+                log_lines.append(
+                    f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} {user}: {type(e).__name__}"
+                )
+                failed_users.append(user)
+                continue
             for session, client in list(clients.items()):
                 try:
                     await client.send_message(user, msg)
